@@ -25,7 +25,7 @@ conda install -c bioconda mafft
 
 ```bash
 # 1 Download
-git clone https://github.com/<YOUR_ACCOUNT>/vira.git
+git clone https://github.com/malabz/ViRA.git
 
 # 2 Open the folder
 cd vira
