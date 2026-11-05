@@ -1,3 +1,12 @@
+/**
+ * @file mafft_runner.cpp
+ * @brief Implements execution and result collection for one MAFFT query chunk.
+ *
+ * The runner translates a chunk request into a MAFFT command, captures the
+ * child process output, optionally parses `--mapout` quality data, and records
+ * process failures in a ChunkResult. Per-chunk query and map files are removed
+ * on the normal return path regardless of the MAFFT exit status.
+ */
 #include "mafft_runner.hpp"
 
 #include "path_utils.hpp"
@@ -12,6 +21,34 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @brief Executes MAFFT for one prepared chunk and packages its observable result.
+ *
+ * Process exit failures and timeouts are represented in the returned
+ * ChunkResult rather than propagated as exceptions. Exceptions raised while
+ * launching or capturing MAFFT are likewise converted to `RUNNER_EXCEPTION`.
+ * When requested, diagnostic stderr is written below @p temp_dir. Map data is
+ * parsed only after a successful process exit and only when the expected map
+ * file exists.
+ *
+ * @param chunk_id Stable identifier assigned by the dispatcher.
+ * @param bucket_name Logical bucket recorded in reports and diagnostic names.
+ * @param chunk_query_path Existing FASTA file containing the query chunk.
+ * @param ref_path Existing reference FASTA passed to MAFFT.
+ * @param threads_per_mafft Thread count forwarded to MAFFT.
+ * @param temp_dir Directory used for optional failure diagnostics.
+ * @param save_failed_stderr Whether failed-process stderr should be persisted.
+ * @param enable_qc Whether `--mapout` should be requested and parsed.
+ * @param mafft_timeout_sec Timeout in seconds; zero disables the timeout.
+ * @param slow_chunk_sec Elapsed-time threshold for marking the chunk slow;
+ *        non-positive values disable slow marking.
+ * @param seq_ids Query identifiers contained in the chunk; ownership is moved
+ *        into the result.
+ * @param total_bases Sum of query bases in the chunk.
+ * @return A complete ChunkResult containing status, captured output, timing,
+ *         identifiers, and optional post-alignment QC data.
+ * @note The query chunk and optional map file are removed before normal return.
+ */
 ChunkResult run_mafft_chunk(
     int chunk_id,
     const std::string& bucket_name,

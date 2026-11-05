@@ -1,3 +1,12 @@
+/**
+ * @file fasta_io.cpp
+ * @brief Implements streaming FASTA parsing, normalized FASTA output, and chunk-result merging.
+ *
+ * Parsing is intentionally streaming: only the current record and one look-ahead
+ * header are retained. Sequence lines are preserved apart from trailing CR removal
+ * and line joining, and emitted records are wrapped at 80 characters.
+ */
+
 #include "fasta_io.hpp"
 
 #include <algorithm>
@@ -10,6 +19,7 @@ bool read_next_fasta_record(std::ifstream& in, FastaRecord& rec, std::string& pe
     rec = FastaRecord{};
     std::string line;
 
+    // `pending_header` carries the one-record look-ahead between successive calls.
     if (pending_header.empty()) {
         while (std::getline(in, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -86,6 +96,8 @@ void append_mafft_stdout_without_ref(const std::string& mafft_output, std::ostre
     bool started_writing = false;
     size_t pos = 0;
 
+    // MAFFT emits the reference as the first FASTA record for every chunk. Suppress
+    // that record so the caller can keep a single reference at the start of the MSA.
     while (pos < mafft_output.size()) {
         size_t next = mafft_output.find('\n', pos);
         if (next == std::string::npos) next = mafft_output.size();

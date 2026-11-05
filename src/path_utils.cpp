@@ -1,3 +1,12 @@
+/**
+ * @file path_utils.cpp
+ * @brief Implements POSIX path handling and temporary-directory naming helpers.
+ *
+ * These helpers deliberately avoid filesystem-library dependencies. Path
+ * normalization is best effort: unresolved output paths are made relative to
+ * the current working directory, while existing paths are canonicalized with
+ * `realpath`.
+ */
 #include "path_utils.hpp"
 
 #include <cerrno>
@@ -55,12 +64,25 @@ std::string absolute_path(const std::string& path) {
 }
 
 namespace {
+/**
+ * @brief Creates one directory with POSIX mode 0755.
+ * @param path Directory path to create; parent directories must already exist.
+ * @throws std::runtime_error If `mkdir` fails, including when @p path already
+ *         exists or its parent is unavailable.
+ */
 void make_dir_or_throw(const std::string& path) {
     if (mkdir(path.c_str(), 0755) != 0) {
         throw std::runtime_error("Failed to create temporary directory: " + path + " (" + std::strerror(errno) + ")");
     }
 }
 
+/**
+ * @brief Generates a zero-padded, twelve-digit decimal suffix.
+ * @return A string in the inclusive lexical range `000000000000` through
+ *         `999999999999`.
+ * @note Randomness reduces name collisions but does not provide a security or
+ *       uniqueness guarantee; directory creation remains the final check.
+ */
 std::string numeric_suffix_12() {
     std::random_device rd;
     std::mt19937_64 gen(rd());

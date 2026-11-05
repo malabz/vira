@@ -1,3 +1,12 @@
+/**
+ * @file report.cpp
+ * @brief Implements tabular QC reports and filtered multiple-alignment output.
+ *
+ * Report writers preserve the decision and status vocabulary defined by the
+ * core data model. Input-QC free-text fields and failure diagnostic paths are
+ * sanitized before TSV output, while filtered FASTA output always preserves
+ * the first (reference) record.
+ */
 #include "report.hpp"
 
 #include "fasta_io.hpp"
@@ -8,6 +17,11 @@
 #include <stdexcept>
 
 namespace {
+/**
+ * @brief Writes the shared input-QC TSV header.
+ * @param f Open output stream receiving the header.
+ * @param include_post_qc Whether post-alignment metric columns are appended.
+ */
 void write_input_qc_header(std::ofstream& f, bool include_post_qc) {
     f << "original_id\tseq_id\theader\tbucket\tseq_len\tlen_diff_ratio\tn_ratio\tinput_decision\tinput_reasons\tneeds_manual_review\talignment_status\talignment_detail";
     if (include_post_qc) {
@@ -16,6 +30,15 @@ void write_input_qc_header(std::ofstream& f, bool include_post_qc) {
     f << '\n';
 }
 
+/**
+ * @brief Serializes one input-QC row with optional post-alignment metrics.
+ * @param f Open output stream receiving the row.
+ * @param r Input decision and alignment status to serialize.
+ * @param post_qc Post-alignment metrics keyed by final sequence identifier.
+ * @param include_post_qc Whether post-alignment columns are emitted. When no
+ *        matching metrics exist, numeric fields remain empty and the QC level
+ *        is written as `NA`.
+ */
 void write_input_qc_row(
     std::ofstream& f,
     const InputQcRow& r,
@@ -50,6 +73,13 @@ void write_input_qc_row(
     f << '\n';
 }
 
+/**
+ * @brief Determines whether a sample belongs in the abnormal-sample report.
+ * @param r Input-QC and alignment state for the sample.
+ * @param post_qc Optional post-alignment QC rows keyed by sequence identifier.
+ * @return `true` for any non-ALIGN decision, non-ALIGNED status, or available
+ *         post-alignment WARN/FAIL result; otherwise `false`.
+ */
 bool is_abnormal(
     const InputQcRow& r,
     const std::unordered_map<std::string, SampleRow>& post_qc) {
@@ -96,6 +126,17 @@ void write_abnormal_deleted_blocks_tsv(
     }
 }
 
+/**
+ * @brief Copies the reference and all known non-FAIL query records to a new MSA.
+ *
+ * The first FASTA record is treated as the reference and is always retained.
+ * Subsequent records are retained only when their identifiers exist in
+ * @p sample_row_map and their level is not `FAIL`; records without QC metadata
+ * are therefore omitted.
+ *
+ * @throws std::runtime_error If the source MSA cannot be opened or the filtered
+ *         output cannot be created.
+ */
 void make_filtered_msa(
     const std::string& full_msa_path,
     const std::string& filtered_msa_path,

@@ -1,3 +1,12 @@
+/**
+ * @file input_qc.cpp
+ * @brief Implements pre-alignment sequence validation and virology suitability decisions.
+ *
+ * Each query record is assigned exactly one dispatch decision after duplicate-ID,
+ * sequence-content, length, ambiguity, and header-keyword checks. All applicable
+ * reason codes are retained even when a higher-priority rule determines the outcome.
+ */
+
 #include "input_qc.hpp"
 
 #include <algorithm>
@@ -6,6 +15,12 @@
 #include <unordered_set>
 
 namespace {
+/**
+ * @brief Tests whether a normalized header contains any configured keyword.
+ * @param lower_header Header text already converted to lowercase.
+ * @param keywords Lowercase keyword list; empty entries are ignored.
+ * @return `true` on the first substring match, otherwise `false`.
+ */
 bool contains_keyword(const std::string& lower_header, const std::vector<std::string>& keywords) {
     for (const auto& kw : keywords) {
         if (!kw.empty() && lower_header.find(kw) != std::string::npos) return true;
@@ -13,6 +28,13 @@ bool contains_keyword(const std::string& lower_header, const std::vector<std::st
     return false;
 }
 
+/**
+ * @brief Detects sequence symbols outside the configured case-insensitive alphabet.
+ * @param seq Sequence symbols to validate.
+ * @param allowed_chars Allowed alphabet; both inputs are compared in uppercase.
+ * @return `true` if at least one sequence character is not allowed.
+ * @note An empty sequence contains no invalid character and is handled separately by QC.
+ */
 bool contains_invalid_sequence_char(const std::string& seq, const std::string& allowed_chars) {
     std::unordered_set<char> allowed;
     allowed.reserve(allowed_chars.size() * 2 + 1);
@@ -25,10 +47,21 @@ bool contains_invalid_sequence_char(const std::string& seq, const std::string& a
     return false;
 }
 
+/**
+ * @brief Appends a reason code unless it is already present.
+ * @param reasons Ordered collection of reason codes accumulated for a sample.
+ * @param reason Code to add.
+ */
 void add_reason(std::vector<std::string>& reasons, const std::string& reason) {
     if (std::find(reasons.begin(), reasons.end(), reason) == reasons.end()) reasons.push_back(reason);
 }
 
+/**
+ * @brief Constructs the stable identifier assigned to a renamed duplicate.
+ * @param id Original sequence identifier.
+ * @param duplicate_index One-based occurrence count, where the first duplicate is `2`.
+ * @return Identifier in the form `ID__dupN`.
+ */
 std::string renamed_duplicate_id(const std::string& id, size_t duplicate_index) {
     std::ostringstream oss;
     oss << id << "__dup" << duplicate_index;
@@ -158,6 +191,8 @@ InputQcDecision assess_input_record(
         review_not_aligned = true;
     }
 
+    // Decision precedence is strict: hard exclusions dominate review-only signals,
+    // which in turn dominate soft review annotations and ordinary alignment.
     if (hard_exclude) {
         row.decision = "EXCLUDE";
         row.alignment_status = "NOT_DISPATCHED";

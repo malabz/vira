@@ -1,3 +1,14 @@
+/**
+ * @file main.cpp
+ * @brief Orchestrates ViRA input validation, chunked MAFFT execution, QC aggregation,
+ *        and report generation.
+ *
+ * The entry point streams query records through input QC, bounds the number of
+ * outstanding asynchronous MAFFT jobs, and writes successful chunks in completion
+ * order. Algorithmic work is delegated to the module interfaces declared in
+ * `include/`.
+ */
+
 #include "args.hpp"
 #include "sequence_stats.hpp"
 #include "common.hpp"
@@ -25,18 +36,40 @@
 #include <vector>
 
 namespace {
+/**
+ * @brief Measures elapsed monotonic time from a previously captured time point.
+ * @param start Start time obtained from the shared steady `Clock`.
+ * @return Elapsed seconds; non-negative when `start` is not later than the current time.
+ */
 double seconds_since(const Clock::time_point& start) {
     return std::chrono::duration<double>(Clock::now() - start).count();
 }
 
+/// Logical bucket used by the current unified dispatch strategy.
 constexpr const char* DEFAULT_BUCKET = "all";
 
+/**
+ * @brief Builds the stable human-readable identifier used in status reports.
+ * @param res Chunk result containing the bucket name and numeric chunk identifier.
+ * @return A label of the form `BUCKET.chunk_NNNNNNNN`.
+ */
 std::string chunk_label(const ChunkResult& res) {
     std::ostringstream oss;
     oss << res.bucket_name << ".chunk_" << std::setw(8) << std::setfill('0') << res.chunk_id;
     return oss.str();
 }
 
+/**
+ * @brief Prints the effective runtime configuration before records are dispatched.
+ * @param ref_len Reference-sequence length in bases.
+ * @param total_queries Number of query records counted before streaming begins.
+ * @param count_elapsed Time spent counting query records, in seconds.
+ * @param args Validated command-line configuration.
+ * @param effective_chunk_size Maximum records permitted in a dispatched chunk.
+ * @param rough_chunk_count Pre-QC estimate based on record count alone.
+ * @param target_chunk_bases Maximum aggregate sequence bases permitted per chunk.
+ * @param temp_dir Concrete temporary directory allocated for this run.
+ */
 void print_configuration(
     size_t ref_len,
     size_t total_queries,
@@ -74,6 +107,15 @@ void print_configuration(
 }
 }
 
+/**
+ * @brief Runs the complete ViRA command-line workflow.
+ * @param argc Number of command-line arguments.
+ * @param argv Argument vector; required paths and options are validated by `parse_args`.
+ * @return `0` on success, `1` for configuration or I/O errors, or `2` when one or
+ *         more MAFFT chunks fail or time out.
+ * @note An empty query FASTA is a successful boundary case and produces an output
+ *       containing only the reference record.
+ */
 int main(int argc, char** argv) {
     const auto total_start = Clock::now();
 
@@ -162,6 +204,11 @@ int main(int argc, char** argv) {
         size_t review_not_aligned_count = 0;
         size_t align_review_count = 0;
 
+        /**
+         * Integrates one completed chunk into the output stream and shared QC state.
+         * Successful chunks append query alignments and mark their samples aligned;
+         * failed chunks retain per-sample failure status for downstream reports.
+         */
         auto handle_result = [&](ChunkResult&& res, std::ostream& out_f) {
             const std::string label = chunk_label(res);
             if (res.success) {
@@ -193,6 +240,11 @@ int main(int argc, char** argv) {
             if (res.slow) slow_chunks.push_back(res);
         };
 
+        /**
+         * Consumes exactly one pending future. A ready future is preferred; otherwise
+         * the oldest pending future is awaited to keep the queue within its bound.
+         * The caller guarantees that `futures` is non-empty.
+         */
         auto drain_one_finished_or_first = [&](std::ostream& out_f) {
             while (true) {
                 for (auto it = futures.begin(); it != futures.end(); ++it) {
@@ -214,6 +266,11 @@ int main(int argc, char** argv) {
         if (!out_f) throw std::runtime_error("Cannot write final output: " + final_out);
         write_fasta_record(out_f, ref_record);
 
+        /**
+         * Materializes and asynchronously dispatches the buffered records for a bucket.
+         * Empty buffers are a no-op. Ownership of sequence identifiers is transferred
+         * to the chunk task, while the reusable record buffer is cleared immediately.
+         */
         auto dispatch_buffer = [&](const std::string& bucket) {
             auto& records = buffers[bucket];
             if (records.empty()) return;

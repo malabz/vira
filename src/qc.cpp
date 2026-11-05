@@ -1,3 +1,11 @@
+/**
+ * @file qc.cpp
+ * @brief Implements parsing and classification of MAFFT `--mapout` quality data.
+ *
+ * Map records are converted into contiguous deleted blocks per sequence, then
+ * summarized into lost-base counts and threshold-based PASS/WARN/FAIL levels.
+ * The parser is intentionally tolerant of comments and malformed data rows.
+ */
 #include "qc.hpp"
 
 #include <algorithm>
@@ -6,6 +14,11 @@
 #include <stdexcept>
 
 namespace {
+/**
+ * @brief Splits a map-data row into exactly three trimmed CSV fields.
+ * @param line Input row. Commas after the second delimiter remain in the third field.
+ * @return Three trimmed fields, or an empty vector when fewer than two commas exist.
+ */
 std::vector<std::string> split_csv3(const std::string& line) {
     std::vector<std::string> parts;
     size_t start = 0;
@@ -25,6 +38,18 @@ std::vector<std::string> split_csv3(const std::string& line) {
     return parts;
 }
 
+/**
+ * @brief Converts one sequence's ordered map records into deleted blocks and statistics.
+ *
+ * Adjacent `-` records form one block only when their original coordinates are
+ * consecutive. The nearest non-deleted mapping on either side is recorded when
+ * available; edge blocks leave the absent boundary string empty.
+ *
+ * @param seq_id Identifier attached to every emitted DeletedBlock.
+ * @param recs Ordered pairs of original coordinate and mapped reference value.
+ * @return Deleted blocks together with aggregate lost-base statistics. Empty
+ *         inputs or an empty identifier produce empty results.
+ */
 std::pair<std::vector<DeletedBlock>, QcStats> flush_map_sequence(
     const std::string& seq_id,
     const std::vector<std::pair<long long, std::string>>& recs) {
@@ -84,6 +109,13 @@ std::pair<std::vector<DeletedBlock>, QcStats> flush_map_sequence(
 }
 }
 
+/**
+ * @brief Parses a MAFFT map file, skipping comments and malformed data rows.
+ *
+ * Sequence sections begin with `>`. Rows with invalid field counts or numeric
+ * coordinates are ignored rather than terminating the entire parse. An unreadable
+ * file yields two empty result containers.
+ */
 std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> parse_map_to_deleted_blocks(
     const std::string& map_path) {
 

@@ -1,3 +1,12 @@
+/**
+ * @file args.cpp
+ * @brief Implements ViRA command-line help, option parsing, and configuration validation.
+ *
+ * Required paths are collected without touching the filesystem. Numeric and policy
+ * constraints are normalized or rejected before the main workflow starts, while a
+ * small set of deprecated options remains accepted for command-line compatibility.
+ */
+
 #include "args.hpp"
 
 #include <cstdio>
@@ -66,14 +75,25 @@ void print_usage(const char* prog) {
 }
 
 namespace {
+/**
+ * @brief Consumes and returns the value following the current command-line option.
+ * @param i In/out index of the current argument; advanced to the consumed value.
+ * @param argc Total number of arguments.
+ * @param argv Argument vector.
+ * @return The next argument as an owning string.
+ * @throws std::runtime_error If the option is the final argument and has no value.
+ */
 std::string read_value(int& i, int argc, char** argv) {
     if (i + 1 >= argc) throw std::runtime_error("Missing option value.");
     ++i;
     return std::string(argv[i]);
 }
 
+/// Converts an integer option using the command-line parser's permissive C semantics.
 int parse_int(const std::string& s) { return std::atoi(s.c_str()); }
+/// Converts a size option using the command-line parser's unsigned C semantics.
 size_t parse_size(const std::string& s) { return static_cast<size_t>(std::strtoull(s.c_str(), nullptr, 10)); }
+/// Converts a floating-point option using the command-line parser's permissive C semantics.
 double parse_double(const std::string& s) { return std::atof(s.c_str()); }
 }
 

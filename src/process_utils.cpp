@@ -1,3 +1,11 @@
+/**
+ * @file process_utils.cpp
+ * @brief Implements POSIX child-process execution with output capture and timeout control.
+ *
+ * The child is placed in a dedicated process group so a timeout can terminate
+ * MAFFT and any descendants. Separate reader threads drain stdout and stderr to
+ * prevent either pipe from blocking the child when output is large.
+ */
 #include "process_utils.hpp"
 
 #include <chrono>
@@ -11,11 +19,31 @@
 #include <vector>
 
 namespace {
+/**
+ * @brief Measures monotonic elapsed wall-clock time from @p start.
+ * @param start Earlier steady-clock time point.
+ * @return Elapsed seconds as a floating-point value.
+ */
 double elapsed_seconds(const std::chrono::steady_clock::time_point& start) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 }
 
+/**
+ * @brief Runs one executable without a shell and captures both output streams.
+ *
+ * @param args Argument vector whose first element names the executable. The
+ *        vector must be non-empty; entries are passed directly to `execvp`.
+ * @param timeout_sec Maximum runtime in seconds. Values less than or equal to
+ *        zero disable timeout enforcement.
+ * @return Exit status, captured stdout/stderr, elapsed time, and timeout state.
+ *         A timeout is reported with exit code 124; signal termination is
+ *         reported as `128 + signal`.
+ * @throws std::runtime_error If pipes cannot be created or the process cannot
+ *         be forked.
+ * @note On timeout, SIGTERM is sent to the process group, followed by SIGKILL
+ *       after a 500 ms grace period.
+ */
 CommandOutput run_process_capture(const std::vector<std::string>& args, int timeout_sec) {
     int out_pipe[2];
     int err_pipe[2];
