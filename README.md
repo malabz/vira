@@ -56,8 +56,8 @@ Usage:
   ./vira -r REF.fasta -q QUERY.fasta -o OUT.fasta [options]
 
 Required arguments:
-  -r, --ref FILE                       Reference FASTA containing exactly one sequence
-  -q, --query FILE                     Query FASTA file
+  -r, --ref FILE                       Uncompressed FASTA (.fa/.fasta/.fas/.fna), exactly one sequence
+  -q, --query FILE                     Uncompressed FASTA (.fa/.fasta/.fas/.fna)
   -o, --out FILE                       Final full MSA FASTA output
 
 Parallelism and chunking:
@@ -133,6 +133,7 @@ Output|Description
 3. The query FASTA file should contain unique sequence IDs. Duplicate IDs are excluded by default and can be renamed with `--duplicate-id-policy rename`.
 4. Suspected non-target species or engineered constructs are not aligned by default. Use `--align-review-samples` only when you explicitly want these records aligned.
 5. The previous `near/short/long × highN/lowN` bucketing logic has been removed. All QC-passing records enter a unified dispatch queue.
+6. Reference and query inputs must be uncompressed FASTA files using `.fa`, `.fasta`, `.fas`, or `.fna`. Compressed archives such as `.gz` or `.zip` must be decompressed first.
 
 ## 🖥️Environment
 
