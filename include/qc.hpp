@@ -6,18 +6,32 @@
 #include "common.hpp"
 
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+/** @brief Reports malformed or structurally invalid MAFFT mapout content. */
+class MapoutFormatError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+/** @brief Reports failures while opening or reading a MAFFT mapout file. */
+class MapoutIoError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 /**
  * @brief Parses MAFFT mapout data into deletion blocks and per-sample totals.
  * @param map_path Path to a MAFFT `.map` file.
  * @return Pair containing all contiguous lost intervals and statistics keyed by
  *         sequence identifier.
- * @note An unreadable file returns two empty collections. Blank, comment, and
- *       malformed data lines are skipped rather than treated as fatal errors.
+ * @throws MapoutIoError If the file cannot be opened or a read operation fails.
+ * @throws MapoutFormatError If a section identifier, field count, or numeric
+ *         field is malformed. Blank and comment lines are accepted.
  */
 std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> parse_map_to_deleted_blocks(
     const std::string& map_path

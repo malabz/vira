@@ -17,6 +17,25 @@
 #include <stdexcept>
 
 namespace {
+std::ofstream open_output_or_throw(const std::string& path, const std::string& artifact) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot create " + artifact + " file: " + path + ". Check the parent directory and permissions."
+        );
+    }
+    return out;
+}
+
+void close_output_or_throw(std::ofstream& out, const std::string& path, const std::string& artifact) {
+    out.close();
+    if (!out) {
+        throw std::runtime_error(
+            "Failed while writing " + artifact + " file: " + path + ". The file may be incomplete."
+        );
+    }
+}
+
 /**
  * @brief Writes the shared input-QC TSV header.
  * @param f Open output stream receiving the header.
@@ -91,22 +110,24 @@ bool is_abnormal(
 }
 
 void write_deleted_blocks_tsv(const std::vector<DeletedBlock>& rows, const std::string& path) {
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "deleted-block report");
     f << "seq_id\tbucket\tblock_start_orig\tblock_end_orig\tblock_len\tleft_ref_pos\tright_ref_pos\n";
     for (const auto& r : rows) {
         f << r.seq_id << '\t' << r.bucket << '\t' << r.block_start_orig << '\t' << r.block_end_orig << '\t'
           << r.block_len << '\t' << r.left_ref_pos << '\t' << r.right_ref_pos << '\n';
     }
+    close_output_or_throw(f, path, "deleted-block report");
 }
 
 void write_sample_qc_summary_tsv(const std::vector<SampleRow>& rows, const std::string& path) {
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "sample-QC report");
     f << "seq_id\tbucket\tseq_len\tlen_diff_ratio\tn_ratio\tlost_count\tlost_ratio\tlost_block_count\tmax_lost_block_len\tqc_level\n";
     f << std::fixed << std::setprecision(8);
     for (const auto& r : rows) {
         f << r.seq_id << '\t' << r.bucket << '\t' << r.seq_len << '\t' << r.len_diff_ratio << '\t' << r.n_ratio << '\t'
           << r.lost_count << '\t' << r.lost_ratio << '\t' << r.lost_block_count << '\t' << r.max_lost_block_len << '\t' << r.qc_level << '\n';
     }
+    close_output_or_throw(f, path, "sample-QC report");
 }
 
 void write_abnormal_deleted_blocks_tsv(
@@ -114,7 +135,7 @@ void write_abnormal_deleted_blocks_tsv(
     const std::unordered_map<std::string, SampleRow>& sample_row_map,
     const std::string& path) {
 
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "abnormal deleted-block report");
     f << "seq_id\tbucket\tqc_level\tblock_start_orig\tblock_end_orig\tblock_len\tleft_ref_pos\tright_ref_pos\n";
     for (const auto& r : block_rows) {
         auto it = sample_row_map.find(r.seq_id);
@@ -124,6 +145,7 @@ void write_abnormal_deleted_blocks_tsv(
               << r.block_end_orig << '\t' << r.block_len << '\t' << r.left_ref_pos << '\t' << r.right_ref_pos << '\n';
         }
     }
+    close_output_or_throw(f, path, "abnormal deleted-block report");
 }
 
 /**
@@ -145,14 +167,13 @@ void make_filtered_msa(
     std::ifstream in(full_msa_path);
     if (!in) throw std::runtime_error("Cannot open full MSA for filtering: " + full_msa_path);
 
-    std::ofstream out(filtered_msa_path);
-    if (!out) throw std::runtime_error("Cannot write filtered MSA: " + filtered_msa_path);
+    std::ofstream out = open_output_or_throw(filtered_msa_path, "filtered MSA");
 
     FastaRecord rec;
     std::string pending;
     bool first_record = true;
 
-    while (read_next_fasta_record(in, rec, pending)) {
+    while (read_next_fasta_record(in, rec, pending, full_msa_path)) {
         if (first_record) {
             write_fasta_record(out, rec);
             first_record = false;
@@ -164,52 +185,57 @@ void make_filtered_msa(
             write_fasta_record(out, rec);
         }
     }
+    close_output_or_throw(out, filtered_msa_path, "filtered MSA");
 }
 
 void write_qc_summary_tsv(
     const std::vector<InputQcRow>& rows,
     const std::unordered_map<std::string, SampleRow>& post_qc,
     const std::string& path) {
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "QC summary report");
     f << std::fixed << std::setprecision(8);
     write_input_qc_header(f, true);
     for (const auto& r : rows) write_input_qc_row(f, r, post_qc, true);
+    close_output_or_throw(f, path, "QC summary report");
 }
 
 void write_excluded_samples_tsv(const std::vector<InputQcRow>& rows, const std::string& path) {
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "excluded-samples report");
     f << std::fixed << std::setprecision(8);
     std::unordered_map<std::string, SampleRow> empty;
     write_input_qc_header(f, false);
     for (const auto& r : rows) {
         if (r.decision == "EXCLUDE" || r.decision == "REVIEW_NOT_ALIGNED") write_input_qc_row(f, r, empty, false);
     }
+    close_output_or_throw(f, path, "excluded-samples report");
 }
 
 void write_unaligned_samples_tsv(const std::vector<InputQcRow>& rows, const std::string& path) {
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "unaligned-samples report");
     f << std::fixed << std::setprecision(8);
     std::unordered_map<std::string, SampleRow> empty;
     write_input_qc_header(f, false);
     for (const auto& r : rows) {
         if (r.alignment_status != "ALIGNED") write_input_qc_row(f, r, empty, false);
     }
+    close_output_or_throw(f, path, "unaligned-samples report");
 }
 
 void write_abnormal_samples_tsv(
     const std::vector<InputQcRow>& rows,
     const std::unordered_map<std::string, SampleRow>& post_qc,
     const std::string& path) {
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "abnormal-samples report");
     f << std::fixed << std::setprecision(8);
     write_input_qc_header(f, true);
     for (const auto& r : rows) {
         if (is_abnormal(r, post_qc)) write_input_qc_row(f, r, post_qc, true);
     }
+    close_output_or_throw(f, path, "abnormal-samples report");
 }
 
 void write_failed_chunks_tsv(const std::vector<ChunkResult>& rows, const std::string& path) {
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "failed-chunks report");
     f << "bucket\tchunk_id\trecord_count\ttotal_bases\telapsed_sec\ttimed_out\tfailure_reason\tstderr_path\n";
     f << std::fixed << std::setprecision(3);
     for (const auto& r : rows) {
@@ -217,14 +243,16 @@ void write_failed_chunks_tsv(const std::vector<ChunkResult>& rows, const std::st
           << r.elapsed_sec << '\t' << (r.timed_out ? "true" : "false") << '\t' << r.failure_reason << '\t'
           << sanitize_tsv_field(r.err_path) << '\n';
     }
+    close_output_or_throw(f, path, "failed-chunks report");
 }
 
 void write_slow_chunks_tsv(const std::vector<ChunkResult>& rows, const std::string& path) {
-    std::ofstream f(path);
+    std::ofstream f = open_output_or_throw(path, "slow-chunks report");
     f << "bucket\tchunk_id\trecord_count\ttotal_bases\telapsed_sec\tsuccess\ttimed_out\n";
     f << std::fixed << std::setprecision(3);
     for (const auto& r : rows) {
         f << r.bucket_name << '\t' << r.chunk_id << '\t' << r.record_count << '\t' << r.total_bases << '\t'
           << r.elapsed_sec << '\t' << (r.success ? "true" : "false") << '\t' << (r.timed_out ? "true" : "false") << '\n';
     }
+    close_output_or_throw(f, path, "slow-chunks report");
 }

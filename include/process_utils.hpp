@@ -25,8 +25,8 @@ struct CommandOutput {
  * @param args Argument vector whose first element names the executable.
  * @param timeout_sec Timeout in seconds; zero or a negative value disables it.
  * @return Captured output, normalized exit status, timeout flag, and duration.
- * @throws std::runtime_error If pipes cannot be created or the process cannot be forked.
- * @pre @p args must contain at least one non-empty executable name.
+ * @throws std::invalid_argument If @p args has no non-empty executable name.
+ * @throws std::runtime_error If process setup, waiting, or captured pipe I/O fails.
  * @note This interface requires POSIX process, pipe, signal, and wait APIs.
  */
 CommandOutput run_process_capture(const std::vector<std::string>& args, int timeout_sec = 0);

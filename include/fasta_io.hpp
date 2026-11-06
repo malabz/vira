@@ -20,26 +20,40 @@
  * @param in Open input stream positioned at or before the next record.
  * @param rec Destination record; reset before parsing.
  * @param pending_header Header text without `>` retained between calls.
+ * @param source_path Optional source path included in validation and I/O errors.
  * @return `true` when a record was parsed; `false` when no further non-empty
  *         header is available.
+ * @throws std::invalid_argument If non-FASTA content appears before the first
+ *         header, a header has no identifier, or an embedded NUL byte is found.
+ * @throws std::runtime_error If the stream reports an I/O failure.
  */
-bool read_next_fasta_record(std::ifstream& in, FastaRecord& rec, std::string& pending_header);
+bool read_next_fasta_record(
+    std::ifstream& in,
+    FastaRecord& rec,
+    std::string& pending_header,
+    const std::string& source_path = ""
+);
 
 /**
  * @brief Reads a FASTA file that must contain exactly one record.
  * @param path Input FASTA path.
  * @return The single parsed record.
- * @throws std::runtime_error If the file cannot be opened, contains no record,
- *         or contains more than one record.
+ * @throws std::invalid_argument If the path is not a regular uncompressed FASTA
+ *         file, the content is malformed, the reference sequence is empty, or
+ *         the record count is not exactly one.
+ * @throws std::runtime_error If the file cannot be opened or read.
  */
 FastaRecord read_single_fasta(const std::string& path);
 
 /**
  * @brief Counts FASTA headers without loading sequence bodies into memory.
  * @param path Input FASTA path.
- * @return Number of lines whose first character is `>`.
- * @throws std::runtime_error If the file cannot be opened.
- * @note Leading whitespace before `>` is not recognized as a header.
+ * @return Number of validated FASTA records. A truly empty or whitespace-only
+ *         query file returns zero.
+ * @throws std::invalid_argument If the path is not a regular uncompressed FASTA
+ *         file or the content is malformed.
+ * @throws std::runtime_error If the file cannot be opened or read.
+ * @note Leading whitespace before `>` is rejected as malformed content.
  */
 size_t count_fasta_sequences(const std::string& path);
 
@@ -55,7 +69,7 @@ void write_fasta_record(std::ostream& out, const FastaRecord& rec);
  * @param records Records to serialize in their current order; an empty vector
  *        produces an empty file.
  * @param path Destination path, truncated if it already exists.
- * @throws std::runtime_error If the destination cannot be opened.
+ * @throws std::runtime_error If the destination cannot be opened or fully written.
  */
 void write_chunk_file(const std::vector<FastaRecord>& records, const std::string& path);
 

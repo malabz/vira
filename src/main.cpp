@@ -20,18 +20,26 @@
 #include "report.hpp"
 
 #include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <chrono>
+#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
+#include <sys/stat.h>
 #include <tuple>
 #include <unordered_map>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -57,6 +65,179 @@ std::string chunk_label(const ChunkResult& res) {
     std::ostringstream oss;
     oss << res.bucket_name << ".chunk_" << std::setw(8) << std::setfill('0') << res.chunk_id;
     return oss.str();
+}
+
+/** @brief Returns whether two existing paths resolve to the same filesystem object. */
+bool paths_refer_to_same_file(const std::string& a, const std::string& b) {
+    struct stat a_stat {};
+    struct stat b_stat {};
+    return stat(a.c_str(), &a_stat) == 0 &&
+           stat(b.c_str(), &b_stat) == 0 &&
+           a_stat.st_dev == b_stat.st_dev &&
+           a_stat.st_ino == b_stat.st_ino;
+}
+
+struct OutputTarget {
+    std::string name;
+    std::string path;
+};
+
+/**
+ * @brief Rejects symbolic-link targets and aliases among inputs and active outputs.
+ * @throws std::invalid_argument If an output could overwrite an input or another output.
+ * @throws std::runtime_error If an existing output target cannot be inspected.
+ */
+void validate_distinct_output_targets(
+    const std::vector<OutputTarget>& targets,
+    const std::string& ref_file,
+    const std::string& query_file) {
+
+    for (size_t i = 0; i < targets.size(); ++i) {
+        const auto& target = targets[i];
+        struct stat link_info {};
+        if (lstat(target.path.c_str(), &link_info) == 0) {
+            if (S_ISLNK(link_info.st_mode)) {
+                throw std::invalid_argument(
+                    target.name + " path must not be a symbolic link: " + target.path + "."
+                );
+            }
+            if (!S_ISREG(link_info.st_mode)) {
+                throw std::invalid_argument(
+                    target.name + " path must be a regular-file target: " + target.path + "."
+                );
+            }
+            if (access(target.path.c_str(), W_OK) != 0) {
+                throw std::runtime_error(
+                    target.name + " file is not writable: " + target.path + " (" +
+                    std::strerror(errno) + ")."
+                );
+            }
+        } else if (errno != ENOENT) {
+            throw std::runtime_error(
+                "Cannot inspect " + target.name + " path '" + target.path + "': " +
+                std::strerror(errno) + "."
+            );
+        }
+
+        if (target.path == ref_file || target.path == query_file ||
+            paths_refer_to_same_file(target.path, ref_file) ||
+            paths_refer_to_same_file(target.path, query_file)) {
+            throw std::invalid_argument(
+                target.name + " path would overwrite an input file: " + target.path + "."
+            );
+        }
+
+        for (size_t j = 0; j < i; ++j) {
+            const auto& other = targets[j];
+            if (target.path == other.path || paths_refer_to_same_file(target.path, other.path)) {
+                throw std::invalid_argument(
+                    target.name + " path aliases " + other.name + " path; output paths must be distinct: " +
+                    target.path + "."
+                );
+            }
+        }
+    }
+}
+
+/**
+ * @brief Rejects destructive output aliases and validates the output directory.
+ * @throws std::invalid_argument If the output aliases an input or is not a regular-file target.
+ * @throws std::runtime_error If the output location cannot be inspected or written.
+ */
+void validate_final_output_path(
+    const std::string& final_out,
+    const std::string& ref_file,
+    const std::string& query_file) {
+
+    if (final_out == ref_file || final_out == query_file ||
+        paths_refer_to_same_file(final_out, ref_file) ||
+        paths_refer_to_same_file(final_out, query_file)) {
+        throw std::invalid_argument(
+            "Output path must differ from reference and query input paths: " + final_out +
+            ". Refusing to overwrite an input file."
+        );
+    }
+
+    struct stat link_info {};
+    if (lstat(final_out.c_str(), &link_info) == 0) {
+        if (S_ISLNK(link_info.st_mode)) {
+            throw std::invalid_argument("Final output path must not be a symbolic link: " + final_out + ".");
+        }
+    } else if (errno != ENOENT) {
+        throw std::runtime_error(
+            "Cannot inspect final output path: " + final_out + " (" + std::strerror(errno) + ")."
+        );
+    }
+
+    struct stat output_stat {};
+    if (stat(final_out.c_str(), &output_stat) == 0) {
+        if (!S_ISREG(output_stat.st_mode)) {
+            throw std::invalid_argument("Expected final output to be a regular file path: " + final_out + ".");
+        }
+        if (access(final_out.c_str(), W_OK) != 0) {
+            throw std::runtime_error(
+                "Final output file is not writable: " + final_out + " (" + std::strerror(errno) + ")."
+            );
+        }
+    } else if (errno != ENOENT) {
+        throw std::runtime_error(
+            "Cannot inspect final output path: " + final_out + " (" + std::strerror(errno) + ")."
+        );
+    }
+
+    const std::string parent = path_dirname(final_out);
+    struct stat parent_stat {};
+    if (stat(parent.c_str(), &parent_stat) != 0) {
+        throw std::runtime_error(
+            "Output directory does not exist or cannot be inspected: " + parent + " (" + std::strerror(errno) + ")."
+        );
+    }
+    if (!S_ISDIR(parent_stat.st_mode)) {
+        throw std::invalid_argument("Output parent path is not a directory: " + parent + ".");
+    }
+    if (access(parent.c_str(), W_OK) != 0) {
+        throw std::runtime_error(
+            "Output directory is not writable: " + parent + " (" + std::strerror(errno) + ")."
+        );
+    }
+}
+
+/** @brief Closes the final MSA stream and reports delayed write failures. */
+void close_final_output_or_throw(std::ofstream& out, const std::string& path) {
+    out.close();
+    if (!out) {
+        throw std::runtime_error(
+            "Failed while writing final output file: " + path + ". The output may be incomplete."
+        );
+    }
+}
+
+/** @brief Validates reference symbols against the configured case-insensitive alphabet. */
+void validate_reference_symbols(const FastaRecord& reference, const Args& args, const std::string& path) {
+    for (size_t i = 0; i < reference.seq.size(); ++i) {
+        const unsigned char raw = static_cast<unsigned char>(reference.seq[i]);
+        const char normalized = static_cast<char>(std::toupper(raw));
+        const bool allowed = std::any_of(
+            args.allowed_seq_chars.begin(),
+            args.allowed_seq_chars.end(),
+            [&](unsigned char candidate) {
+                return static_cast<char>(std::toupper(candidate)) == normalized;
+            }
+        );
+        if (allowed) continue;
+
+        std::ostringstream symbol;
+        if (std::isprint(raw)) {
+            symbol << "'" << reference.seq[i] << "'";
+        } else {
+            symbol << "byte 0x" << std::hex << std::uppercase << static_cast<int>(raw);
+        }
+        throw std::invalid_argument(
+            "Reference FASTA contains unsupported sequence symbol " + symbol.str() +
+            " at position " + std::to_string(i + 1) + " in " + path +
+            ". Allowed symbols: " + args.allowed_seq_chars + "."
+        );
+    }
 }
 
 /**
@@ -125,13 +306,11 @@ int main(int argc, char** argv) {
         const std::string query_file = absolute_path(args.query);
         const std::string final_out = absolute_path(args.out);
 
-        if (!file_exists(ref_file)) throw std::runtime_error("Reference file not found: " + ref_file);
-        if (!file_exists(query_file)) throw std::runtime_error("Query file not found: " + query_file);
+        validate_final_output_path(final_out, ref_file, query_file);
 
-        const std::string temp_dir = prepare_temp_dir(args, final_out);
         FastaRecord ref_record = read_single_fasta(ref_file);
         const size_t ref_len = ref_record.seq.size();
-        if (ref_len == 0) throw std::runtime_error("Reference FASTA sequence is empty.");
+        validate_reference_symbols(ref_record, args, ref_file);
 
         const auto count_start = Clock::now();
         const size_t total_queries = count_fasta_sequences(query_file);
@@ -139,24 +318,71 @@ int main(int argc, char** argv) {
 
         if (total_queries == 0) {
             std::ofstream out(final_out);
+            if (!out) {
+                throw std::runtime_error(
+                    "Cannot create final output file: " + final_out + ". Check the parent directory and permissions."
+                );
+            }
             write_fasta_record(out, ref_record);
+            close_final_output_or_throw(out, final_out);
             std::cout << "The query FASTA contains no sequences; only the reference sequence was written.\n";
             std::cout << "Output written to: " << final_out << "\n";
             return 0;
         }
 
+        const std::string prefix = output_prefix(final_out);
+        const std::string filtered_msa_path = prefix + ".filtered.fasta";
+        const std::string deleted_blocks_path = prefix + ".deleted_blocks.tsv";
+        const std::string sample_qc_summary_path = prefix + ".sample_qc_summary.tsv";
+        const std::string abnormal_deleted_blocks_path = prefix + ".abnormal_deleted_blocks.tsv";
+        const std::string qc_summary_path = prefix + ".qc_summary.tsv";
+        const std::string excluded_samples_path = prefix + ".excluded_samples.tsv";
+        const std::string unaligned_samples_path = prefix + ".unaligned_samples.tsv";
+        const std::string abnormal_samples_path = prefix + ".abnormal_samples.tsv";
+        const std::string failed_chunks_path = prefix + ".failed_chunks.tsv";
+        const std::string slow_chunks_path = prefix + ".slow_chunks.tsv";
+
+        std::vector<OutputTarget> output_targets = {
+            {"Final output", final_out},
+            {"QC summary report", qc_summary_path},
+            {"Excluded-samples report", excluded_samples_path},
+            {"Unaligned-samples report", unaligned_samples_path},
+            {"Abnormal-samples report", abnormal_samples_path},
+            {"Failed-chunks report", failed_chunks_path},
+            {"Slow-chunks report", slow_chunks_path}
+        };
+        if (args.enable_qc) {
+            output_targets.push_back({"Filtered MSA", filtered_msa_path});
+            output_targets.push_back({"Deleted-block report", deleted_blocks_path});
+            output_targets.push_back({"Sample-QC report", sample_qc_summary_path});
+            output_targets.push_back({"Abnormal deleted-block report", abnormal_deleted_blocks_path});
+        }
+        validate_distinct_output_targets(output_targets, ref_file, query_file);
+
         int effective_chunk_size;
         if (args.disable_auto_chunk) {
             effective_chunk_size = args.chunk_size;
         } else {
-            const int adaptive = std::max(1, static_cast<int>((total_queries + args.max_instances - 1) / args.max_instances));
+            const size_t instance_count = static_cast<size_t>(args.max_instances);
+            const size_t adaptive_size = total_queries / instance_count + (total_queries % instance_count != 0 ? 1 : 0);
+            if (adaptive_size > static_cast<size_t>(std::numeric_limits<int>::max())) {
+                throw std::overflow_error("Automatic chunk size exceeds the supported integer range.");
+            }
+            const int adaptive = std::max(1, static_cast<int>(adaptive_size));
             effective_chunk_size = std::min(args.chunk_size, adaptive);
         }
 
+        if (args.target_chunk_bases == 0 &&
+            ref_len > std::numeric_limits<size_t>::max() / static_cast<size_t>(effective_chunk_size)) {
+            throw std::overflow_error("Automatic target chunk base count exceeds the supported size range.");
+        }
         const size_t target_chunk_bases = args.target_chunk_bases > 0
             ? args.target_chunk_bases
             : static_cast<size_t>(effective_chunk_size) * ref_len;
-        const size_t rough_chunk_count = (total_queries + static_cast<size_t>(effective_chunk_size) - 1) / static_cast<size_t>(effective_chunk_size);
+        const size_t effective_chunk_size_value = static_cast<size_t>(effective_chunk_size);
+        const size_t rough_chunk_count = total_queries / effective_chunk_size_value +
+            (total_queries % effective_chunk_size_value != 0 ? 1 : 0);
+        const std::string temp_dir = prepare_temp_dir(args, final_out);
 
         print_configuration(
             ref_len,
@@ -181,6 +407,9 @@ int main(int argc, char** argv) {
         bucket_counts[DEFAULT_BUCKET] = 0;
 
         std::vector<InputQcRow> input_rows;
+        if (total_queries > (std::numeric_limits<size_t>::max() - 1) / 2) {
+            throw std::overflow_error("Query record count is too large for internal lookup-table sizing.");
+        }
         input_rows.reserve(total_queries);
         std::unordered_map<std::string, size_t> row_index_by_seq_id;
         row_index_by_seq_id.reserve(total_queries * 2 + 1);
@@ -193,7 +422,8 @@ int main(int argc, char** argv) {
         std::vector<ChunkResult> failed_chunks;
         std::vector<ChunkResult> slow_chunks;
 
-        const size_t max_pending_futures = static_cast<size_t>(args.max_instances * args.max_pending_factor);
+        const size_t max_pending_futures = static_cast<size_t>(args.max_instances) *
+            static_cast<size_t>(args.max_pending_factor);
         std::vector<std::future<ChunkResult>> futures;
 
         const auto non_target_keywords = split_keywords(args.non_target_keywords);
@@ -317,7 +547,7 @@ int main(int argc, char** argv) {
         std::string pending;
         size_t read_count = 0;
 
-        while (read_next_fasta_record(qin, rec, pending)) {
+        while (read_next_fasta_record(qin, rec, pending, query_file)) {
             const SequenceStats stats = calculate_sequence_stats(rec, ref_len);
             const std::string bucket = DEFAULT_BUCKET;
             const size_t seq_len = stats.seq_len;
@@ -346,6 +576,9 @@ int main(int argc, char** argv) {
                 row_index_by_seq_id[input_decision.record.id] = row_index;
                 sample_meta[input_decision.record.id] = SampleMeta{bucket, seq_len, n_ratio, len_diff_ratio};
 
+                if (seq_len > std::numeric_limits<size_t>::max() - buffer_bases[bucket]) {
+                    throw std::overflow_error("Chunk base count exceeds the supported size range.");
+                }
                 buffers[bucket].push_back(std::move(input_decision.record));
                 buffer_bases[bucket] += seq_len;
                 bucket_counts[bucket]++;
@@ -378,20 +611,8 @@ int main(int argc, char** argv) {
                 std::cout << "Completed " << completed << "/" << remaining_total << " remaining chunks...\n";
             }
         }
-        out_f.close();
+        close_final_output_or_throw(out_f, final_out);
         const double wait_elapsed = seconds_since(wait_start);
-
-        const std::string prefix = output_prefix(final_out);
-        const std::string filtered_msa_path = prefix + ".filtered.fasta";
-        const std::string deleted_blocks_path = prefix + ".deleted_blocks.tsv";
-        const std::string sample_qc_summary_path = prefix + ".sample_qc_summary.tsv";
-        const std::string abnormal_deleted_blocks_path = prefix + ".abnormal_deleted_blocks.tsv";
-        const std::string qc_summary_path = prefix + ".qc_summary.tsv";
-        const std::string excluded_samples_path = prefix + ".excluded_samples.tsv";
-        const std::string unaligned_samples_path = prefix + ".unaligned_samples.tsv";
-        const std::string abnormal_samples_path = prefix + ".abnormal_samples.tsv";
-        const std::string failed_chunks_path = prefix + ".failed_chunks.tsv";
-        const std::string slow_chunks_path = prefix + ".slow_chunks.tsv";
 
         std::unordered_map<std::string, SampleRow> sample_row_map;
         if (args.enable_qc) {
@@ -471,8 +692,23 @@ int main(int argc, char** argv) {
         }
 
         return failed_chunks.empty() ? 0 : 2;
-    } catch (const std::exception& e) {
+    } catch (const std::invalid_argument& e) {
         std::cerr << "Error: " << e.what() << "\n";
+        return 1;
+    } catch (const std::ios_base::failure& e) {
+        std::cerr << "Error: I/O stream failure: " << e.what() << "\n";
+        return 1;
+    } catch (const std::system_error& e) {
+        std::cerr << "Error: System operation failed: " << e.what() << "\n";
+        return 1;
+    } catch (const std::runtime_error& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return 1;
+    } catch (const std::bad_alloc&) {
+        std::cerr << "Error: Insufficient memory to complete the requested operation.\n";
+        return 1;
+    } catch (const std::length_error& e) {
+        std::cerr << "Error: Requested input exceeds supported container limits: " << e.what() << "\n";
         return 1;
     }
 }

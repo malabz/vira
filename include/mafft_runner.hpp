@@ -29,8 +29,11 @@
  * @param total_bases Sum of query-sequence lengths in the chunk.
  * @return A ChunkResult describing success, timing, output, diagnostics, and
  *         optional post-alignment QC data.
- * @note Process-launch exceptions are converted into a failed result rather
- *       than propagated. The caller must ensure `mafft` is available on PATH.
+ * @note Known process, malformed-output, system, and mapout failures are converted
+ *       into a failed result and logged with the chunk label rather than propagated. When
+ *       @p save_failed_stderr is true, @ref ChunkResult::err_path is populated
+ *       only after the diagnostic file is written successfully. The caller
+ *       must ensure `mafft` is available on PATH.
  */
 ChunkResult run_mafft_chunk(
     int chunk_id,

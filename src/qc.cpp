@@ -4,14 +4,17 @@
  *
  * Map records are converted into contiguous deleted blocks per sequence, then
  * summarized into lost-base counts and threshold-based PASS/WARN/FAIL levels.
- * The parser is intentionally tolerant of comments and malformed data rows.
+ * Blank and comment lines are accepted, while malformed structure or numeric
+ * fields are rejected with path and line-number context.
  */
 #include "qc.hpp"
 
 #include <algorithm>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace {
 /**
@@ -36,6 +39,54 @@ std::vector<std::string> split_csv3(const std::string& line) {
         s = (b == std::string::npos) ? "" : s.substr(b, e - b + 1);
     }
     return parts;
+}
+
+/**
+ * @brief Parses one integer field without accepting trailing characters.
+ * @param value Trimmed field value.
+ * @param field_name Human-readable field name for diagnostics.
+ * @param map_path Source mapout path.
+ * @param line_number One-based source line number.
+ * @return Parsed signed integer.
+ * @throws MapoutFormatError If the value is invalid, non-positive, unsafe for
+ *         coordinate arithmetic, out of range, or only partially consumed.
+ */
+long long parse_mapout_integer(
+    const std::string& value,
+    const std::string& field_name,
+    const std::string& map_path,
+    size_t line_number) {
+
+    size_t consumed = 0;
+    long long parsed = 0;
+    try {
+        parsed = std::stoll(value, &consumed);
+    } catch (const std::invalid_argument&) {
+        throw MapoutFormatError(
+            "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+            ": expected an integer for " + field_name + ", got '" + value + "'."
+        );
+    } catch (const std::out_of_range&) {
+        throw MapoutFormatError(
+            "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+            ": value out of range for " + field_name + ": '" + value + "'."
+        );
+    }
+
+    if (consumed != value.size()) {
+        throw MapoutFormatError(
+            "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+            ": trailing characters in " + field_name + ": '" + value + "'."
+        );
+    }
+    if (parsed <= 0 || parsed == std::numeric_limits<long long>::max()) {
+        throw MapoutFormatError(
+            "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+            ": " + field_name + " must be between 1 and " +
+            std::to_string(std::numeric_limits<long long>::max() - 1) + ", got '" + value + "'."
+        );
+    }
+    return parsed;
 }
 
 /**
@@ -110,11 +161,11 @@ std::pair<std::vector<DeletedBlock>, QcStats> flush_map_sequence(
 }
 
 /**
- * @brief Parses a MAFFT map file, skipping comments and malformed data rows.
+ * @brief Parses a MAFFT map file with strict structural and numeric validation.
  *
- * Sequence sections begin with `>`. Rows with invalid field counts or numeric
- * coordinates are ignored rather than terminating the entire parse. An unreadable
- * file yields two empty result containers.
+ * Sequence sections begin with `>`. Blank and comment lines are ignored. Data
+ * rows outside a section, empty section identifiers, invalid field counts, and
+ * invalid coordinates terminate parsing with a contextual exception.
  */
 std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> parse_map_to_deleted_blocks(
     const std::string& map_path) {
@@ -122,7 +173,7 @@ std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> p
     std::ifstream in(map_path);
     std::vector<DeletedBlock> all_blocks;
     std::unordered_map<std::string, QcStats> sample_stats;
-    if (!in) return {all_blocks, sample_stats};
+    if (!in) throw MapoutIoError("Cannot open MAFFT mapout file: " + map_path + ".");
 
     std::string current_seq_id;
     std::vector<std::pair<long long, std::string>> records;
@@ -135,30 +186,73 @@ std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> p
     };
 
     std::string line;
+    size_t line_number = 0;
+    bool saw_section = false;
+    std::unordered_set<std::string> section_ids;
     while (std::getline(in, line)) {
+        ++line_number;
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty()) continue;
+        if (line.find('\0') != std::string::npos) {
+            throw MapoutFormatError(
+                "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+                ": embedded NUL byte detected; the file may be binary or corrupted."
+            );
+        }
+        const size_t first_content = line.find_first_not_of(" \t");
+        if (first_content == std::string::npos) continue;
         if (line[0] == '>') {
+            const std::string next_seq_id = line.substr(1);
+            if (next_seq_id.find_first_not_of(" \t") == std::string::npos) {
+                throw MapoutFormatError(
+                    "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+                    ": sequence section identifier is empty."
+                );
+            }
+            if (!section_ids.insert(next_seq_id).second) {
+                throw MapoutFormatError(
+                    "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+                    ": duplicate sequence section identifier '" + next_seq_id + "'."
+                );
+            }
             flush();
-            current_seq_id = line.substr(1);
+            current_seq_id = next_seq_id;
+            saw_section = true;
             continue;
         }
-        if (line[0] == '#') continue;
+        if (line[first_content] == '#') continue;
+
+        if (current_seq_id.empty()) {
+            throw MapoutFormatError(
+                "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+                ": data row appears before the first sequence section."
+            );
+        }
 
         auto parts = split_csv3(line);
-        if (parts.size() != 3) continue;
-
-        try {
-            long long orig_pos = std::stoll(parts[1]);
-            if (parts[2] == "-") {
-                records.push_back({orig_pos, "-"});
-            } else {
-                (void)std::stoll(parts[2]);
-                records.push_back({orig_pos, parts[2]});
-            }
-        } catch (...) {
-            continue;
+        if (parts.size() != 3) {
+            throw MapoutFormatError(
+                "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+                ": expected exactly three comma-separated fields."
+            );
         }
+
+        if (parts[0].empty()) {
+            throw MapoutFormatError(
+                "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
+                ": sequence-symbol field is empty."
+            );
+        }
+        const long long orig_pos = parse_mapout_integer(parts[1], "original position", map_path, line_number);
+        if (parts[2] == "-") {
+            records.push_back({orig_pos, "-"});
+        } else {
+            (void)parse_mapout_integer(parts[2], "reference position", map_path, line_number);
+            records.push_back({orig_pos, parts[2]});
+        }
+    }
+    if (in.bad()) throw MapoutIoError("I/O error while reading MAFFT mapout file: " + map_path + ".");
+    if (!saw_section) {
+        throw MapoutFormatError("Malformed MAFFT mapout file '" + map_path + "': no sequence sections were found.");
     }
     flush();
 

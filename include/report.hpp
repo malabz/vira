@@ -13,6 +13,7 @@
  * @brief Writes every parsed deletion interval as a TSV report.
  * @param rows Rows to serialize in their current order.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  */
 void write_deleted_blocks_tsv(const std::vector<DeletedBlock>& rows, const std::string& path);
 
@@ -20,6 +21,7 @@ void write_deleted_blocks_tsv(const std::vector<DeletedBlock>& rows, const std::
  * @brief Writes one post-alignment QC summary row per dispatched sample.
  * @param rows Rows to serialize in their current order.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  */
 void write_sample_qc_summary_tsv(const std::vector<SampleRow>& rows, const std::string& path);
 
@@ -28,6 +30,7 @@ void write_sample_qc_summary_tsv(const std::vector<SampleRow>& rows, const std::
  * @param block_rows Parsed deletion intervals.
  * @param sample_row_map Post-alignment result keyed by sequence identifier.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  * @note Blocks without a matching sample row and blocks from PASS samples are omitted.
  */
 void write_abnormal_deleted_blocks_tsv(
@@ -41,7 +44,8 @@ void write_abnormal_deleted_blocks_tsv(
  * @param full_msa_path Complete MSA whose first record is the shared reference.
  * @param filtered_msa_path Destination FASTA path, truncated if it exists.
  * @param sample_row_map Post-alignment QC rows keyed by effective identifier.
- * @throws std::runtime_error If the input or output file cannot be opened.
+ * @throws std::runtime_error If the input cannot be read or the output cannot
+ *         be created or fully written.
  * @note The first FASTA record is always retained. Later records are retained
  *       only when they have a matching QC row whose level is not FAIL.
  */
@@ -57,6 +61,7 @@ void make_filtered_msa(
  * @param post_qc Post-alignment rows keyed by effective identifier; absent rows
  *        are emitted with empty metrics and `NA` QC level.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  */
 void write_qc_summary_tsv(
     const std::vector<InputQcRow>& rows,
@@ -68,6 +73,7 @@ void write_qc_summary_tsv(
  * @brief Writes records excluded or withheld from dispatch by input QC.
  * @param rows Input-QC rows in processing order.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  * @note Both `EXCLUDE` and `REVIEW_NOT_ALIGNED` decisions are included.
  */
 void write_excluded_samples_tsv(const std::vector<InputQcRow>& rows, const std::string& path);
@@ -76,6 +82,7 @@ void write_excluded_samples_tsv(const std::vector<InputQcRow>& rows, const std::
  * @brief Writes every record whose final alignment status is not `ALIGNED`.
  * @param rows Input-QC rows after chunk completion statuses are applied.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  */
 void write_unaligned_samples_tsv(const std::vector<InputQcRow>& rows, const std::string& path);
 
@@ -84,6 +91,7 @@ void write_unaligned_samples_tsv(const std::vector<InputQcRow>& rows, const std:
  * @param rows Input-QC rows after chunk completion statuses are applied.
  * @param post_qc Post-alignment rows keyed by effective identifier.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  * @note A record is abnormal when its decision is not `ALIGN`, its alignment
  *       status is not `ALIGNED`, or its post-QC level is WARN/FAIL.
  */
@@ -97,6 +105,7 @@ void write_abnormal_samples_tsv(
  * @brief Writes diagnostics for failed and timed-out chunks.
  * @param rows Failed chunk results in collection order.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  */
 void write_failed_chunks_tsv(const std::vector<ChunkResult>& rows, const std::string& path);
 
@@ -104,5 +113,6 @@ void write_failed_chunks_tsv(const std::vector<ChunkResult>& rows, const std::st
  * @brief Writes timing and status information for chunks marked as slow.
  * @param rows Slow chunk results in collection order.
  * @param path Destination path, truncated if it exists.
+ * @throws std::runtime_error If the report cannot be created or fully written.
  */
 void write_slow_chunks_tsv(const std::vector<ChunkResult>& rows, const std::string& path);

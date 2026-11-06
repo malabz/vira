@@ -3,14 +3,19 @@
  * @brief Implements ViRA command-line help, option parsing, and configuration validation.
  *
  * Required paths are collected without touching the filesystem. Numeric and policy
- * constraints are normalized or rejected before the main workflow starts, while a
- * small set of deprecated options remains accepted for command-line compatibility.
+ * constraints are parsed strictly and rejected when invalid before the main workflow
+ * starts, while deprecated options remain accepted for command-line compatibility.
  */
 
 #include "args.hpp"
 
+#include <cerrno>
+#include <charconv>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -18,8 +23,8 @@ void print_usage(const char* prog) {
     std::printf("Usage:\n");
     std::printf("  %s -r REF.fasta -q QUERY.fasta -o OUT.fasta [options]\n\n", prog);
     std::printf("Required arguments:\n");
-    std::printf("  -r, --ref FILE                       Reference FASTA containing exactly one sequence\n");
-    std::printf("  -q, --query FILE                     Query FASTA file\n");
+    std::printf("  -r, --ref FILE                       Uncompressed FASTA (.fa/.fasta/.fas/.fna), exactly one sequence\n");
+    std::printf("  -q, --query FILE                     Uncompressed FASTA (.fa/.fasta/.fas/.fna)\n");
     std::printf("  -o, --out FILE                       Final full MSA FASTA output\n\n");
     std::printf("Parallelism and chunking:\n");
     std::printf("  --max-instances INT                  Concurrent MAFFT processes [16]\n");
@@ -80,21 +85,95 @@ namespace {
  * @param i In/out index of the current argument; advanced to the consumed value.
  * @param argc Total number of arguments.
  * @param argv Argument vector.
+ * @param option Option whose value is being consumed, used in error messages.
  * @return The next argument as an owning string.
- * @throws std::runtime_error If the option is the final argument and has no value.
+ * @throws std::invalid_argument If the option is the final argument and has no value.
  */
-std::string read_value(int& i, int argc, char** argv) {
-    if (i + 1 >= argc) throw std::runtime_error("Missing option value.");
+std::string read_value(int& i, int argc, char** argv, const std::string& option) {
+    if (i + 1 >= argc) throw std::invalid_argument("Missing value for option " + option + ".");
     ++i;
     return std::string(argv[i]);
 }
 
-/// Converts an integer option using the command-line parser's permissive C semantics.
-int parse_int(const std::string& s) { return std::atoi(s.c_str()); }
-/// Converts a size option using the command-line parser's unsigned C semantics.
-size_t parse_size(const std::string& s) { return static_cast<size_t>(std::strtoull(s.c_str(), nullptr, 10)); }
-/// Converts a floating-point option using the command-line parser's permissive C semantics.
-double parse_double(const std::string& s) { return std::atof(s.c_str()); }
+/**
+ * @brief Parses a complete base-10 integer option without silent truncation.
+ * @param s Raw option value.
+ * @param option Option name used in contextual error messages.
+ * @return Parsed value in the `int` range.
+ * @throws std::invalid_argument If @p s is malformed or outside the `int` range.
+ */
+int parse_int(const std::string& s, const std::string& option) {
+    int value = 0;
+    const char* begin = s.data();
+    const char* end = begin + s.size();
+    const auto result = std::from_chars(begin, end, value, 10);
+
+    if (result.ec == std::errc::result_out_of_range) {
+        throw std::invalid_argument(
+            "Value for " + option + " is outside the supported integer range: '" + s + "'."
+        );
+    }
+    if (s.empty() || result.ec == std::errc::invalid_argument || result.ptr != end) {
+        throw std::invalid_argument(
+            "Invalid integer for " + option + ": '" + s + "'. Expected a base-10 integer."
+        );
+    }
+    return value;
+}
+
+/**
+ * @brief Parses a complete non-negative integer into `size_t`.
+ * @param s Raw option value.
+ * @param option Option name used in contextual error messages.
+ * @return Parsed non-negative value.
+ * @throws std::invalid_argument If @p s is negative, malformed, or out of range.
+ */
+size_t parse_size(const std::string& s, const std::string& option) {
+    size_t value = 0;
+    const char* begin = s.data();
+    const char* end = begin + s.size();
+    const auto result = std::from_chars(begin, end, value, 10);
+
+    if (result.ec == std::errc::result_out_of_range) {
+        throw std::invalid_argument(
+            "Value for " + option + " is outside the supported non-negative integer range: '" + s + "'."
+        );
+    }
+    if (s.empty() || s.front() == '-' || result.ec == std::errc::invalid_argument || result.ptr != end) {
+        throw std::invalid_argument(
+            "Invalid non-negative integer for " + option + ": '" + s + "'."
+        );
+    }
+    return value;
+}
+
+/**
+ * @brief Parses a complete finite floating-point option.
+ * @param s Raw option value.
+ * @param option Option name used in contextual error messages.
+ * @return Parsed finite value.
+ * @throws std::invalid_argument If @p s is malformed, non-finite, or out of range.
+ */
+double parse_double(const std::string& s, const std::string& option) {
+    bool contains_space = false;
+    for (unsigned char c : s) {
+        if (std::isspace(c)) {
+            contains_space = true;
+            break;
+        }
+    }
+
+    errno = 0;
+    char* parsed_end = nullptr;
+    const double value = std::strtod(s.c_str(), &parsed_end);
+    if (s.empty() || contains_space || parsed_end == s.c_str() || *parsed_end != '\0' ||
+        errno == ERANGE || !std::isfinite(value)) {
+        throw std::invalid_argument(
+            "Invalid number for " + option + ": '" + s + "'. Expected a finite number."
+        );
+    }
+    return value;
+}
 }
 
 Args parse_args(int argc, char** argv) {
@@ -102,74 +181,97 @@ Args parse_args(int argc, char** argv) {
 
     if (argc == 1) {
         print_usage(argv[0]);
-        throw std::runtime_error("No arguments were provided.");
+        throw std::invalid_argument("No arguments were provided.");
     }
 
     for (int i = 1; i < argc; ++i) {
         std::string opt(argv[i]);
         if (opt == "-h" || opt == "--help") { print_usage(argv[0]); std::exit(0); }
-        if (opt == "-r" || opt == "--ref") { args.ref = read_value(i, argc, argv); continue; }
-        if (opt == "-q" || opt == "--query") { args.query = read_value(i, argc, argv); continue; }
-        if (opt == "-o" || opt == "--out") { args.out = read_value(i, argc, argv); continue; }
-        if (opt == "--max-instances") { args.max_instances = parse_int(read_value(i, argc, argv)); continue; }
-        if (opt == "--threads-per-mafft") { args.threads_per_mafft = parse_int(read_value(i, argc, argv)); continue; }
-        if (opt == "--chunk-size") { args.chunk_size = parse_int(read_value(i, argc, argv)); continue; }
-        if (opt == "--target-chunk-bases") { args.target_chunk_bases = parse_size(read_value(i, argc, argv)); continue; }
-        if (opt == "--long-chunk-size") { (void)read_value(i, argc, argv); continue; } // deprecated; unified dispatch ignores this option
-        if (opt == "--long-target-chunk-bases") { (void)read_value(i, argc, argv); continue; } // deprecated; unified dispatch ignores this option
-        if (opt == "--single-long-ratio") { (void)read_value(i, argc, argv); continue; } // deprecated; unified dispatch ignores this option
-        if (opt == "--mafft-timeout-sec") { args.mafft_timeout_sec = parse_int(read_value(i, argc, argv)); continue; }
-        if (opt == "--slow-chunk-sec") { args.slow_chunk_sec = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--temp-dir") { args.temp_dir = read_value(i, argc, argv); args.temp_dir_provided = true; continue; }
+        if (opt == "-r" || opt == "--ref") { args.ref = read_value(i, argc, argv, opt); continue; }
+        if (opt == "-q" || opt == "--query") { args.query = read_value(i, argc, argv, opt); continue; }
+        if (opt == "-o" || opt == "--out") { args.out = read_value(i, argc, argv, opt); continue; }
+        if (opt == "--max-instances") { args.max_instances = parse_int(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--threads-per-mafft") { args.threads_per_mafft = parse_int(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--chunk-size") { args.chunk_size = parse_int(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--target-chunk-bases") { args.target_chunk_bases = parse_size(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--long-chunk-size") { (void)read_value(i, argc, argv, opt); continue; } // deprecated; unified dispatch ignores this option
+        if (opt == "--long-target-chunk-bases") { (void)read_value(i, argc, argv, opt); continue; } // deprecated; unified dispatch ignores this option
+        if (opt == "--single-long-ratio") { (void)read_value(i, argc, argv, opt); continue; } // deprecated; unified dispatch ignores this option
+        if (opt == "--mafft-timeout-sec") { args.mafft_timeout_sec = parse_int(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--slow-chunk-sec") { args.slow_chunk_sec = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--temp-dir") { args.temp_dir = read_value(i, argc, argv, opt); args.temp_dir_provided = true; continue; }
         if (opt == "--cleanup") { args.cleanup = true; continue; }
-        if (opt == "--len-tolerance") { (void)read_value(i, argc, argv); continue; } // deprecated; no near/short/long bucketing
-        if (opt == "--n-threshold") { (void)read_value(i, argc, argv); continue; } // deprecated; no highN/lowN bucketing
+        if (opt == "--len-tolerance") { (void)read_value(i, argc, argv, opt); continue; } // deprecated; no near/short/long bucketing
+        if (opt == "--n-threshold") { (void)read_value(i, argc, argv, opt); continue; } // deprecated; no highN/lowN bucketing
         if (opt == "--save-failed-stderr") { args.save_failed_stderr = true; continue; }
         if (opt == "--disable-auto-chunk") { args.disable_auto_chunk = true; continue; }
-        if (opt == "--max-pending-factor") { args.max_pending_factor = parse_int(read_value(i, argc, argv)); continue; }
+        if (opt == "--max-pending-factor") { args.max_pending_factor = parse_int(read_value(i, argc, argv, opt), opt); continue; }
         if (opt == "--enable-qc") { args.enable_qc = true; continue; }
-        if (opt == "--warn-lost-ratio") { args.warn_lost_ratio = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--fail-lost-ratio") { args.fail_lost_ratio = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--warn-max-block-len") { args.warn_max_block_len = parse_int(read_value(i, argc, argv)); continue; }
-        if (opt == "--fail-max-block-len") { args.fail_max_block_len = parse_int(read_value(i, argc, argv)); continue; }
-        if (opt == "--duplicate-id-policy") { args.duplicate_id_policy = read_value(i, argc, argv); continue; }
-        if (opt == "--allowed-seq-chars") { args.allowed_seq_chars = read_value(i, argc, argv); continue; }
-        if (opt == "--review-n-ratio") { args.review_n_ratio = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--exclude-n-ratio") { args.exclude_n_ratio = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--exclude-min-len-ratio") { args.exclude_min_len_ratio = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--exclude-max-len-ratio") { args.exclude_max_len_ratio = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--reasonable-min-len-ratio") { args.reasonable_min_len_ratio = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--reasonable-max-len-ratio") { args.reasonable_max_len_ratio = parse_double(read_value(i, argc, argv)); continue; }
-        if (opt == "--non-target-keywords") { args.non_target_keywords = read_value(i, argc, argv); continue; }
-        if (opt == "--engineered-keywords") { args.engineered_keywords = read_value(i, argc, argv); continue; }
+        if (opt == "--warn-lost-ratio") { args.warn_lost_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--fail-lost-ratio") { args.fail_lost_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--warn-max-block-len") { args.warn_max_block_len = parse_int(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--fail-max-block-len") { args.fail_max_block_len = parse_int(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--duplicate-id-policy") { args.duplicate_id_policy = read_value(i, argc, argv, opt); continue; }
+        if (opt == "--allowed-seq-chars") { args.allowed_seq_chars = read_value(i, argc, argv, opt); continue; }
+        if (opt == "--review-n-ratio") { args.review_n_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--exclude-n-ratio") { args.exclude_n_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--exclude-min-len-ratio") { args.exclude_min_len_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--exclude-max-len-ratio") { args.exclude_max_len_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--reasonable-min-len-ratio") { args.reasonable_min_len_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--reasonable-max-len-ratio") { args.reasonable_max_len_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
+        if (opt == "--non-target-keywords") { args.non_target_keywords = read_value(i, argc, argv, opt); continue; }
+        if (opt == "--engineered-keywords") { args.engineered_keywords = read_value(i, argc, argv, opt); continue; }
         if (opt == "--align-review-samples") { args.align_review_samples = true; continue; }
-        throw std::runtime_error("Unknown option: " + opt + ". Use --help to see available options.");
+        throw std::invalid_argument("Unknown option: " + opt + ". Use --help to see available options.");
     }
 
     if (args.ref.empty() || args.query.empty() || args.out.empty()) {
         print_usage(argv[0]);
-        throw std::runtime_error("Missing required arguments.");
+        throw std::invalid_argument("Missing required arguments.");
     }
-    if (args.max_instances < 1) args.max_instances = 1;
-    if (args.threads_per_mafft < 1) args.threads_per_mafft = 1;
-    if (args.chunk_size < 1) args.chunk_size = 1;
-    if (args.max_pending_factor < 1) args.max_pending_factor = 1;
-    if (args.mafft_timeout_sec < 0) args.mafft_timeout_sec = 0;
-    if (args.slow_chunk_sec < 0.0) args.slow_chunk_sec = 0.0;
+    if (args.max_instances < 1) throw std::invalid_argument("--max-instances must be at least 1.");
+    if (args.threads_per_mafft < 1) throw std::invalid_argument("--threads-per-mafft must be at least 1.");
+    if (args.chunk_size < 1) throw std::invalid_argument("--chunk-size must be at least 1.");
+    if (args.max_pending_factor < 1) throw std::invalid_argument("--max-pending-factor must be at least 1.");
+    if (args.max_instances > std::numeric_limits<int>::max() / args.max_pending_factor) {
+        throw std::invalid_argument(
+            "The product of --max-instances and --max-pending-factor exceeds the supported range."
+        );
+    }
+    if (args.mafft_timeout_sec < 0) throw std::invalid_argument("--mafft-timeout-sec must be 0 or greater.");
+    if (args.slow_chunk_sec < 0.0) throw std::invalid_argument("--slow-chunk-sec must be 0 or greater.");
     if (args.duplicate_id_policy != "exclude" && args.duplicate_id_policy != "rename") {
-        throw std::runtime_error("--duplicate-id-policy must be exclude or rename.");
+        throw std::invalid_argument("--duplicate-id-policy must be exclude or rename.");
     }
+    if (args.allowed_seq_chars.empty()) throw std::invalid_argument("--allowed-seq-chars must not be empty.");
     if (args.review_n_ratio < 0.0 || args.exclude_n_ratio < 0.0 || args.review_n_ratio > 1.0 || args.exclude_n_ratio > 1.0) {
-        throw std::runtime_error("N-ratio thresholds must be within [0, 1].");
+        throw std::invalid_argument("N-ratio thresholds must be within [0, 1].");
     }
     if (args.review_n_ratio > args.exclude_n_ratio) {
-        throw std::runtime_error("--review-n-ratio cannot exceed --exclude-n-ratio.");
+        throw std::invalid_argument("--review-n-ratio cannot exceed --exclude-n-ratio.");
     }
     if (args.exclude_min_len_ratio < 0.0 || args.exclude_max_len_ratio <= 0.0 || args.exclude_min_len_ratio > args.exclude_max_len_ratio) {
-        throw std::runtime_error("Invalid exclude length-ratio thresholds.");
+        throw std::invalid_argument("Invalid exclude length-ratio thresholds.");
     }
     if (args.reasonable_min_len_ratio < 0.0 || args.reasonable_max_len_ratio <= 0.0 || args.reasonable_min_len_ratio > args.reasonable_max_len_ratio) {
-        throw std::runtime_error("Invalid reasonable length-ratio thresholds.");
+        throw std::invalid_argument("Invalid reasonable length-ratio thresholds.");
+    }
+    if (args.reasonable_min_len_ratio < args.exclude_min_len_ratio ||
+        args.reasonable_max_len_ratio > args.exclude_max_len_ratio) {
+        throw std::invalid_argument("Reasonable length-ratio thresholds must lie within the exclusion range.");
+    }
+    if (args.warn_lost_ratio < 0.0 || args.warn_lost_ratio > 1.0 ||
+        args.fail_lost_ratio < 0.0 || args.fail_lost_ratio > 1.0) {
+        throw std::invalid_argument("Post-alignment lost-ratio thresholds must be within [0, 1].");
+    }
+    if (args.warn_lost_ratio > args.fail_lost_ratio) {
+        throw std::invalid_argument("--warn-lost-ratio cannot exceed --fail-lost-ratio.");
+    }
+    if (args.warn_max_block_len < 0 || args.fail_max_block_len < 0) {
+        throw std::invalid_argument("Post-alignment block-length thresholds must be non-negative.");
+    }
+    if (args.warn_max_block_len > args.fail_max_block_len) {
+        throw std::invalid_argument("--warn-max-block-len cannot exceed --fail-max-block-len.");
     }
     return args;
 }

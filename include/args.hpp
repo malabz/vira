@@ -9,14 +9,15 @@
  * @brief Parses and validates command-line arguments.
  *
  * Required input, output, parallelism, chunking, and QC options are converted
- * into an Args value. Numeric options are normalized or validated according to
- * the CLI contract.
+ * into an Args value. Numeric values must be complete, finite, in range, and
+ * consistent with the CLI threshold relationships.
  *
  * @param argc Number of entries in @p argv, including the program name.
  * @param argv Null-terminated argument strings supplied by the process.
  * @return A fully populated and validated argument set.
- * @throws std::runtime_error If a required option or value is missing, an
- *         option is unknown, or a threshold combination is invalid.
+ * @throws std::invalid_argument If a required option or value is missing, an
+ *         option is unknown, a numeric value is malformed or out of range, or
+ *         a threshold combination is invalid.
  * @note Passing `-h` or `--help` prints usage and terminates the process with
  *       a successful exit status rather than returning.
  */
