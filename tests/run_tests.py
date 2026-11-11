@@ -53,6 +53,7 @@ def main() -> int:
 
         build_qc_tests = compiler + common_flags + [
             str(test_dir / "qc_parser_tests.cpp"),
+            str(repo_root / "src" / "fasta_io.cpp"),
             str(repo_root / "src" / "qc.cpp"),
             "-o",
             str(qc_test_binary),

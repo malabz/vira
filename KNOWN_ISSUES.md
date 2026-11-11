@@ -3,83 +3,82 @@
 This document records known limitations of the current ViRA development snapshot.
 It is a development candidate, not a stable release.
 
-## Open P1 integrity issues
+## Resolved P1 integrity issues
 
-The following issues remain intentionally unfixed in this snapshot. They were
-identified during an independent acceptance audit and are not resolved by the
-successful regression runs described below.
+The following issues were identified during an independent acceptance audit and
+are resolved in the current development snapshot. Both fixes use fail-closed chunk
+handling: no query alignment or post-alignment QC payload is committed until every
+enabled identity check succeeds.
 
-### 1. MAFFT output record identities are not verified
+### 1. MAFFT output record identities are verified
 
-**Severity:** P1 — output integrity
+**Former severity:** P1 — output integrity
 
-`validate_mafft_fasta_output()` verifies that MAFFT stdout:
+MAFFT stdout retains the existing structural, NUL, empty-record, and record-count
+checks. It now additionally enforces these invariants:
 
-- is structurally valid FASTA;
-- contains no NUL bytes;
-- has non-empty headers and sequences; and
-- contains exactly one reference record plus the expected number of query records.
+- the first record's primary identifier exactly matches the parsed reference ID;
+- query primary identifiers form exactly the set dispatched in the chunk;
+- identifier comparison is case-sensitive and independent of query output order;
+- duplicate, missing, unexpected, renamed, and reference-conflicting IDs fail;
+- expected query IDs must themselves be unique; and
+- full header descriptions are ignored after the first whitespace-delimited token.
 
-It does not verify that the returned reference and query identifiers match the
-identifiers submitted for that chunk, nor does it reject duplicate or unexpected
-output identifiers.
+FASTA input, MAFFT stdout, and mapout sections share one primary-ID extraction
+rule. Input QC also reserves effective IDs globally, including the reference ID,
+so duplicate renaming cannot create collisions such as `x`, `x__dup2`, and a later
+original `x__dup2`.
 
-A crafted or corrupted MAFFT-compatible process can therefore return the correct
-number of FASTA records under incorrect or duplicate headers and still pass the
-current validation. `handle_result()` then marks the expected input identifiers as
-`ALIGNED`, even when those identifiers are absent from the appended alignment.
+Identity failures use `MAFFT_OUTPUT_FORMAT_ERROR`. The chunk remains failed, its
+stdout is not appended, and its expected samples are reported as `CHUNK_FAILED`
+rather than `ALIGNED`.
 
-**Potential impact:** sequences can be misidentified or duplicated in the final
-MSA while the corresponding expected samples are reported as successfully aligned.
+Automated workflow coverage includes correct IDs, replaced reference/query IDs,
+duplicate queries, missing and unexpected IDs, reference-first enforcement,
+order-independent query sets, descriptive headers, reference/query conflicts, and
+duplicate-rename collisions. Failure tests also verify that no query from the
+failed chunk reaches the full or filtered MSA.
 
-**Conceptual reproduction:** replace MAFFT with a compatible executable that exits
-with status 0 and emits the expected number of valid FASTA records, but changes or
-duplicates the query headers. The chunk can be accepted because its record count
-and FASTA structure remain valid.
+### 2. Mapout section identities are matched to expected chunk IDs
 
-**Current partial safeguards:** non-zero MAFFT exits, timeouts, malformed FASTA,
-empty records, NUL bytes, and incorrect record counts are rejected. These checks do
-not establish record identity.
+**Former severity:** P1 — post-alignment QC integrity
 
-**Operational mitigation:** use a trusted MAFFT installation and independently
-compare the final MSA identifiers with the input identifiers. Do not treat the
-`ALIGNED` status alone as proof of output identity.
+When `--enable-qc` is active, mapout section primary identifiers must form exactly
+the query-ID set dispatched in that chunk. Section order is irrelevant, while
+missing, unexpected, replaced, extra, or duplicate primary IDs raise
+`MapoutFormatError` and retain the stable `MAPOUT_FORMAT_ERROR` failure category.
+Diagnostics render sorted `missing=[...]` and `unexpected=[...]` sets.
 
-### 2. Mapout section identities are not matched to expected chunk IDs
+The chunk success path is atomic: stdout validation, mapout parsing, and mapout
+identity validation all finish before stdout, deleted blocks, statistics, or the
+success flag are stored in `ChunkResult`. A failed chunk therefore contributes no
+accepted alignment or QC payload.
 
-**Severity:** P1 — post-alignment QC integrity
+`build_sample_qc_rows()` now omits samples without validated mapout statistics.
+Consequently, failed samples have `NA` post-alignment QC in `qc_summary.tsv`, do
+not appear as zero-loss `PASS` rows in `sample_qc_summary.tsv`, and cannot enter the
+filtered MSA through missing metadata.
 
-The mapout parser validates section syntax, field counts, numeric values, NUL bytes,
-and duplicate section identifiers. After parsing, however, the set of mapout
-section identifiers is not compared with the set of query identifiers dispatched
-in the corresponding chunk.
+Automated parser and workflow coverage includes complete, missing, replaced,
+extra, reordered, descriptive, and duplicate sections, duplicate expected IDs,
+atomic failure reports, and the absence of a default PASS when statistics are
+missing.
 
-If a syntactically valid mapout file is truncated or omits one or more expected
-sections, the chunk can still be accepted. During sample-QC row construction, a
-sample with no parsed mapout statistics receives default zero-valued statistics
-and can consequently be reported as `PASS`. Unexpected section identifiers are
-likewise not rejected by an exact expected-set comparison.
+### Remaining mapout limitation
 
-**Potential impact:** missing or mismatched mapout data can cause affected samples
-to receive an incorrect zero-loss `PASS` result.
-
-**Conceptual reproduction:** for a chunk containing multiple query identifiers,
-provide a syntactically valid mapout file containing only one expected section.
-Parsing can succeed while omitted samples receive default zero-loss statistics.
-
-**Current partial safeguards:** missing mapout files, files with no sections,
-duplicate sections, malformed rows, invalid coordinates, and I/O failures are
-rejected. These checks do not prove that the section set is complete and belongs
-to the submitted chunk.
-
-**Operational mitigation:** independently verify that mapout data covers every
-aligned query represented in `*.sample_qc_summary.tsv`. Treat zero-loss `PASS`
-results cautiously when mapout completeness has not been independently established.
+Exact section-identity validation proves that every expected section exists and no
+unexpected section is present. It does not prove that every coordinate row inside
+an otherwise valid section is complete. Internal-row truncation remains outside
+the scope of this fix because its validation requires confirmed MAFFT coordinate
+semantics for query sequences containing `-` and `.`.
 
 ## Real-MAFFT acceptance coverage
 
-An independent, read-only acceptance run compared the pre-improvement baseline
-commit `4e6a03e0ba18ba49480a5e6c9d65c62d92828604` with this development working tree.
+The original independent, read-only acceptance run compared the pre-improvement
+baseline commit `4e6a03e0ba18ba49480a5e6c9d65c62d92828604` with the pre-fix development
+snapshot. After the identity fixes above, the same scenario matrix was rerun by
+comparing committed pre-fix snapshot
+`e0b5a7ed1a5923856f36105a80ac02e393734fda` with the fixed working tree.
 
 The runs used:
 
@@ -113,6 +112,13 @@ For these fixtures:
 - the non-trivial mapout case produced identical deletion blocks, QC levels, and
   filtered alignments.
 
+In the post-fix rerun, single-process outputs and all QC artifacts were
+byte-for-byte identical to the pre-fix snapshot. Concurrent final MSAs were either
+byte-for-byte identical or differed only in the existing completion-based record
+order; strict normalization by primary ID confirmed identical full headers and
+aligned sequence content. Real mapout sections passed the new exact-ID validation,
+and the 4 bp and 6 bp deletion-block results remained unchanged.
+
 ### Acceptance limitations
 
 This evidence is intentionally limited:
@@ -125,8 +131,8 @@ This evidence is intentionally limited:
   path, or every possible malformed child-process output;
 - the real-MAFFT regression matrix was executed as an external acceptance exercise
   and is not part of the repository's automated test suite or CI; and
-- successful regression output does not resolve either P1 integrity issue listed
-  above.
+- exact mapout section identity does not establish completeness of coordinate rows
+  inside each section, as described above.
 
 In the audit environment, MAFFT's shell wrapper could not access `/dev/stderr`
 inside the restricted sandbox. Valid acceptance runs were therefore executed in

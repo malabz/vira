@@ -38,6 +38,8 @@ public:
 
     int run() {
         test_valid_mapout();
+        test_mapout_identity_validation();
+        test_missing_stats_are_omitted();
 
         expect_format_error(
             "invalid-original-integer.map",
@@ -168,14 +170,15 @@ private:
     void expect_format_error(
         const std::string& filename,
         const std::string& content,
-        const std::vector<std::string>& expected_parts) {
+        const std::vector<std::string>& expected_parts,
+        std::vector<std::string> expected_ids = {"sample"}) {
 
         const fs::path path = fixture_dir_ / filename;
         if (!write_fixture(path, content)) return;
 
         bool caught_expected = false;
         try {
-            (void)parse_map_to_deleted_blocks(path.string());
+            (void)parse_map_to_deleted_blocks(path.string(), expected_ids);
         } catch (const MapoutFormatError& error) {
             caught_expected = true;
             const std::string message = error.what();
@@ -203,7 +206,7 @@ private:
             "C,2,2\n";
         if (!write_fixture(path, content)) return;
 
-        auto parsed = parse_map_to_deleted_blocks(path.string());
+        auto parsed = parse_map_to_deleted_blocks(path.string(), {"sample1", "sample2"});
         const auto& blocks = parsed.first;
         const auto& stats = parsed.second;
 
@@ -239,11 +242,86 @@ private:
         }
     }
 
+    void test_mapout_identity_validation() {
+        const fs::path descriptive_path = fixture_dir_ / "descriptive-sections.map";
+        const std::string descriptive_content =
+            ">q2 second query description\n"
+            "C,1,1\n"
+            ">q1 first query description\n"
+            "A,1,1\n";
+        if (write_fixture(descriptive_path, descriptive_content)) {
+            auto parsed = parse_map_to_deleted_blocks(descriptive_path.string(), {"q1", "q2"});
+            check(parsed.second.size() == 2, "descriptive mapout sections should preserve both primary IDs");
+            check(parsed.second.find("q1") != parsed.second.end(), "descriptive q1 section should use primary ID q1");
+            check(parsed.second.find("q2") != parsed.second.end(), "reordered descriptive q2 section should be accepted");
+        }
+
+        expect_format_error(
+            "missing-expected-section.map",
+            ">q1\nA,1,1\n",
+            {"missing=[q2]", "unexpected=[]"},
+            {"q1", "q2"}
+        );
+        expect_format_error(
+            "replaced-expected-section.map",
+            ">q1\nA,1,1\n>rogue\nC,1,1\n",
+            {"missing=[q2]", "unexpected=[rogue]"},
+            {"q1", "q2"}
+        );
+        expect_format_error(
+            "case-changed-section.map",
+            ">Q1\nA,1,1\n>q2\nC,1,1\n",
+            {"missing=[q1]", "unexpected=[Q1]"},
+            {"q1", "q2"}
+        );
+        expect_format_error(
+            "extra-section.map",
+            ">q1\nA,1,1\n>q2\nC,1,1\n>rogue\nG,1,1\n",
+            {"missing=[]", "unexpected=[rogue]"},
+            {"q1", "q2"}
+        );
+        expect_format_error(
+            "sorted-mismatch-diagnostic.map",
+            ">zeta\nA,1,1\n>alpha\nC,1,1\n",
+            {"missing=[q1,q2]", "unexpected=[alpha,zeta]"},
+            {"q2", "q1"}
+        );
+        expect_format_error(
+            "duplicate-primary-section.map",
+            ">q1 first description\nA,1,1\n>q1 second description\nC,1,1\n",
+            {"line 3", "duplicate sequence section identifier", "q1"},
+            {"q1"}
+        );
+        expect_format_error(
+            "duplicate-expected-ids.map",
+            ">q1\nA,1,1\n",
+            {"Invalid expected MAFFT mapout identifier set", "duplicates=[q1]"},
+            {"q1", "q1"}
+        );
+    }
+
+    void test_missing_stats_are_omitted() {
+        std::map<std::string, SampleMeta> metadata;
+        metadata["q1"] = SampleMeta{"all", 10, 0.0, 0.0};
+        metadata["q2"] = SampleMeta{"all", 10, 0.0, 0.0};
+
+        std::unordered_map<std::string, QcStats> statistics;
+        statistics["q1"] = QcStats{};
+
+        const Args args;
+        const auto rows = build_sample_qc_rows(metadata, statistics, args);
+        check(rows.size() == 1, "missing statistics must not create a zero-loss PASS SampleRow");
+        if (rows.size() == 1) {
+            check(rows[0].seq_id == "q1", "only the sample with present statistics should produce a SampleRow");
+            check(rows[0].qc_level == "PASS", "present zero-loss statistics should retain PASS semantics");
+        }
+    }
+
     void test_missing_file() {
         const fs::path path = fixture_dir_ / "missing.map";
         bool caught_expected = false;
         try {
-            (void)parse_map_to_deleted_blocks(path.string());
+            (void)parse_map_to_deleted_blocks(path.string(), {"sample"});
         } catch (const MapoutIoError& error) {
             caught_expected = true;
             const std::string message = error.what();
