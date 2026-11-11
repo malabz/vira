@@ -144,6 +144,13 @@ void reject_nul(const std::string& line, const std::string& source_path) {
 }
 }
 
+std::string fasta_primary_id(const std::string& header) {
+    std::istringstream input(header);
+    std::string id;
+    input >> id;
+    return id.empty() ? header : id;
+}
+
 bool read_next_fasta_record(
     std::ifstream& in,
     FastaRecord& rec,
@@ -177,9 +184,7 @@ bool read_next_fasta_record(
     }
 
     rec.header = pending_header;
-    std::istringstream iss(rec.header);
-    iss >> rec.id;
-    if (rec.id.empty()) rec.id = rec.header;
+    rec.id = fasta_primary_id(rec.header);
     pending_header.clear();
 
     while (std::getline(in, line)) {

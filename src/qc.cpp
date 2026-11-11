@@ -9,14 +9,31 @@
  */
 #include "qc.hpp"
 
+#include "fasta_io.hpp"
+
 #include <algorithm>
 #include <fstream>
+#include <iterator>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
 
 namespace {
+std::string format_identifier_set(const std::set<std::string>& identifiers) {
+    std::ostringstream output;
+    output << '[';
+    bool first = true;
+    for (const auto& identifier : identifiers) {
+        if (!first) output << ',';
+        output << identifier;
+        first = false;
+    }
+    output << ']';
+    return output.str();
+}
+
 /**
  * @brief Splits a map-data row into exactly three trimmed CSV fields.
  * @param line Input row. Commas after the second delimiter remain in the third field.
@@ -168,12 +185,30 @@ std::pair<std::vector<DeletedBlock>, QcStats> flush_map_sequence(
  * invalid coordinates terminate parsing with a contextual exception.
  */
 std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> parse_map_to_deleted_blocks(
-    const std::string& map_path) {
+    const std::string& map_path,
+    const std::vector<std::string>& expected_seq_ids) {
 
     std::ifstream in(map_path);
     std::vector<DeletedBlock> all_blocks;
     std::unordered_map<std::string, QcStats> sample_stats;
     if (!in) throw MapoutIoError("Cannot open MAFFT mapout file: " + map_path + ".");
+
+    std::set<std::string> expected_ids;
+    std::set<std::string> duplicate_expected_ids;
+    for (const auto& identifier : expected_seq_ids) {
+        if (identifier.empty()) {
+            throw MapoutFormatError(
+                "Invalid expected MAFFT mapout identifier set for '" + map_path + "': an identifier is empty."
+            );
+        }
+        if (!expected_ids.insert(identifier).second) duplicate_expected_ids.insert(identifier);
+    }
+    if (!duplicate_expected_ids.empty()) {
+        throw MapoutFormatError(
+            "Invalid expected MAFFT mapout identifier set for '" + map_path + "': duplicates=" +
+            format_identifier_set(duplicate_expected_ids) + "."
+        );
+    }
 
     std::string current_seq_id;
     std::vector<std::pair<long long, std::string>> records;
@@ -201,13 +236,14 @@ std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> p
         const size_t first_content = line.find_first_not_of(" \t");
         if (first_content == std::string::npos) continue;
         if (line[0] == '>') {
-            const std::string next_seq_id = line.substr(1);
-            if (next_seq_id.find_first_not_of(" \t") == std::string::npos) {
+            const std::string section_header = line.substr(1);
+            if (section_header.find_first_not_of(" \t") == std::string::npos) {
                 throw MapoutFormatError(
                     "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
                     ": sequence section identifier is empty."
                 );
             }
+            const std::string next_seq_id = fasta_primary_id(section_header);
             if (!section_ids.insert(next_seq_id).second) {
                 throw MapoutFormatError(
                     "Malformed MAFFT mapout file '" + map_path + "' at line " + std::to_string(line_number) +
@@ -256,6 +292,26 @@ std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> p
     }
     flush();
 
+    std::set<std::string> actual_ids(section_ids.begin(), section_ids.end());
+    std::set<std::string> missing;
+    std::set<std::string> unexpected;
+    std::set_difference(
+        expected_ids.begin(), expected_ids.end(),
+        actual_ids.begin(), actual_ids.end(),
+        std::inserter(missing, missing.end())
+    );
+    std::set_difference(
+        actual_ids.begin(), actual_ids.end(),
+        expected_ids.begin(), expected_ids.end(),
+        std::inserter(unexpected, unexpected.end())
+    );
+    if (!missing.empty() || !unexpected.empty()) {
+        throw MapoutFormatError(
+            "MAFFT mapout section identifier mismatch in '" + map_path + "': missing=" +
+            format_identifier_set(missing) + ", unexpected=" + format_identifier_set(unexpected) + "."
+        );
+    }
+
     return {all_blocks, sample_stats};
 }
 
@@ -277,9 +333,9 @@ std::vector<SampleRow> build_sample_qc_rows(
         const auto& seq_id = kv.first;
         const auto& meta = kv.second;
 
-        QcStats qc;
         auto it = sample_qc_stats.find(seq_id);
-        if (it != sample_qc_stats.end()) qc = it->second;
+        if (it == sample_qc_stats.end()) continue;
+        const QcStats& qc = it->second;
 
         SampleRow row;
         row.seq_id = seq_id;

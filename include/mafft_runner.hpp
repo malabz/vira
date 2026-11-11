@@ -19,6 +19,7 @@
  * @param bucket_name Logical dispatch bucket used in labels and reports.
  * @param chunk_query_path Temporary FASTA containing the query records.
  * @param ref_path FASTA path containing the single reference record.
+ * @param expected_ref_id Primary identifier of the parsed reference record.
  * @param threads_per_mafft Positive thread count passed to MAFFT.
  * @param temp_dir Existing directory used for optional failure diagnostics.
  * @param save_failed_stderr Persist stderr when MAFFT fails or throws.
@@ -33,13 +34,16 @@
  *       into a failed result and logged with the chunk label rather than propagated. When
  *       @p save_failed_stderr is true, @ref ChunkResult::err_path is populated
  *       only after the diagnostic file is written successfully. The caller
- *       must ensure `mafft` is available on PATH.
+ *       must ensure `mafft` is available on PATH. A successful result is
+ *       committed only after stdout reference/query identities and, when
+ *       enabled, the complete mapout section identity set are validated.
  */
 ChunkResult run_mafft_chunk(
     int chunk_id,
     const std::string& bucket_name,
     const std::string& chunk_query_path,
     const std::string& ref_path,
+    const std::string& expected_ref_id,
     int threads_per_mafft,
     const std::string& temp_dir,
     bool save_failed_stderr,

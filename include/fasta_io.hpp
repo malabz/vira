@@ -11,6 +11,16 @@
 #include <vector>
 
 /**
+ * @brief Extracts the primary identifier from a FASTA header.
+ * @param header Complete header text without the leading `>`.
+ * @return The first whitespace-delimited token, or @p header when no token can
+ *         be extracted.
+ * @note This is the canonical identifier rule used by FASTA input, MAFFT
+ *       output validation, and mapout section validation.
+ */
+std::string fasta_primary_id(const std::string& header);
+
+/**
  * @brief Reads the next FASTA record from a stream.
  *
  * Sequence lines are concatenated, and a trailing carriage return from CRLF

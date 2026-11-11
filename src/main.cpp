@@ -39,6 +39,7 @@
 #include <sys/stat.h>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -415,6 +416,9 @@ int main(int argc, char** argv) {
         row_index_by_seq_id.reserve(total_queries * 2 + 1);
         std::unordered_map<std::string, size_t> seen_ids;
         seen_ids.reserve(total_queries * 2 + 1);
+        std::unordered_set<std::string> used_effective_ids;
+        used_effective_ids.reserve(total_queries * 2 + 1);
+        used_effective_ids.insert(ref_record.id);
 
         std::map<std::string, SampleMeta> sample_meta;
         std::vector<DeletedBlock> all_deleted_blocks;
@@ -526,6 +530,7 @@ int main(int argc, char** argv) {
                 bucket,
                 chunk_path,
                 ref_file,
+                ref_record.id,
                 args.threads_per_mafft,
                 temp_dir,
                 args.save_failed_stderr,
@@ -563,6 +568,7 @@ int main(int argc, char** argv) {
                 n_ratio,
                 len_diff_ratio,
                 seen_ids,
+                used_effective_ids,
                 non_target_keywords,
                 engineered_keywords
             );

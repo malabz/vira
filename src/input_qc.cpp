@@ -11,7 +11,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace {
@@ -115,6 +117,7 @@ InputQcDecision assess_input_record(
     double n_ratio,
     double len_diff_ratio,
     std::unordered_map<std::string, size_t>& seen_ids,
+    std::unordered_set<std::string>& used_effective_ids,
     const std::vector<std::string>& non_target_keywords,
     const std::vector<std::string>& engineered_keywords) {
 
@@ -135,23 +138,42 @@ InputQcDecision assess_input_record(
     bool review_not_aligned = false;
     bool soft_review = false;
 
-    auto seen_it = seen_ids.find(decision.record.id);
-    if (seen_it == seen_ids.end()) {
-        seen_ids[decision.record.id] = 1;
-    } else {
-        seen_it->second += 1;
-        if (args.duplicate_id_policy == "rename") {
-            const std::string new_id = renamed_duplicate_id(decision.record.id, seen_it->second);
-            decision.record.id = new_id;
-            decision.record.header = new_id + " " + decision.record.header;
-            row.seq_id = new_id;
-            row.header = decision.record.header;
-            add_reason(reasons, "DUPLICATE_ID_RENAMED");
-            soft_review = true;
-        } else {
-            add_reason(reasons, "DUPLICATE_ID");
-            hard_exclude = true;
+    const std::string original_id = decision.record.id;
+    auto [seen_it, first_original_occurrence] = seen_ids.emplace(original_id, 1);
+    size_t duplicate_index = 1;
+    if (!first_original_occurrence) {
+        if (seen_it->second == std::numeric_limits<size_t>::max()) {
+            throw std::overflow_error("Duplicate identifier count exceeds the supported size range for '" + original_id + "'.");
         }
+        duplicate_index = ++seen_it->second;
+    }
+
+    const bool original_duplicate = !first_original_occurrence;
+    const bool effective_id_collision = used_effective_ids.find(original_id) != used_effective_ids.end();
+    if (args.duplicate_id_policy == "rename" && (original_duplicate || effective_id_collision)) {
+        size_t candidate_index = original_duplicate ? duplicate_index : 2;
+        std::string new_id;
+        while (true) {
+            new_id = renamed_duplicate_id(original_id, candidate_index);
+            if (used_effective_ids.find(new_id) == used_effective_ids.end()) break;
+            if (candidate_index == std::numeric_limits<size_t>::max()) {
+                throw std::overflow_error("Cannot allocate a unique renamed identifier for '" + original_id + "'.");
+            }
+            ++candidate_index;
+        }
+
+        decision.record.id = new_id;
+        decision.record.header = new_id + " " + decision.record.header;
+        row.seq_id = new_id;
+        row.header = decision.record.header;
+        used_effective_ids.insert(new_id);
+        add_reason(reasons, "DUPLICATE_ID_RENAMED");
+        soft_review = true;
+    } else if (original_duplicate || effective_id_collision) {
+        add_reason(reasons, "DUPLICATE_ID");
+        hard_exclude = true;
+    } else {
+        used_effective_ids.insert(original_id);
     }
 
     if (seq_len == 0) {

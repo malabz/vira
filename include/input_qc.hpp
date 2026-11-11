@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 /**
@@ -59,6 +60,8 @@ struct InputQcDecision {
  * @param n_ratio Precomputed N/n fraction, expected in `[0, 1]`.
  * @param len_diff_ratio Precomputed signed length difference relative to the reference.
  * @param seen_ids Mutable occurrence count keyed by original record identifier.
+ * @param used_effective_ids Mutable set containing every effective identifier
+ *        already reserved, including the reference identifier.
  * @param non_target_keywords Lowercase header substrings indicating a non-target sample.
  * @param engineered_keywords Lowercase header substrings indicating an engineered construct.
  * @return Effective record, complete QC row, and dispatch flag.
@@ -75,6 +78,7 @@ InputQcDecision assess_input_record(
     double n_ratio,
     double len_diff_ratio,
     std::unordered_map<std::string, size_t>& seen_ids,
+    std::unordered_set<std::string>& used_effective_ids,
     const std::vector<std::string>& non_target_keywords,
     const std::vector<std::string>& engineered_keywords
 );

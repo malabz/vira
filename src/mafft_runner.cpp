@@ -11,6 +11,7 @@
  */
 #include "mafft_runner.hpp"
 
+#include "fasta_io.hpp"
 #include "path_utils.hpp"
 #include "process_utils.hpp"
 #include "qc.hpp"
@@ -23,7 +24,9 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -36,16 +39,60 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+std::string format_identifier_set(const std::set<std::string>& identifiers) {
+    std::ostringstream output;
+    output << '[';
+    bool first = true;
+    for (const auto& identifier : identifiers) {
+        if (!first) output << ',';
+        output << identifier;
+        first = false;
+    }
+    output << ']';
+    return output.str();
+}
+
 void validate_mafft_fasta_output(
     const std::string& output,
-    size_t expected_query_records,
+    const std::string& expected_ref_id,
+    const std::vector<std::string>& expected_query_ids,
     const std::string& prefix) {
+
+    if (expected_ref_id.empty()) {
+        throw MafftOutputFormatError(
+            "MAFFT chunk '" + prefix + "' has an empty expected reference identifier."
+        );
+    }
+
+    std::set<std::string> expected_queries;
+    std::set<std::string> duplicate_expected_queries;
+    for (const auto& identifier : expected_query_ids) {
+        if (identifier.empty()) {
+            throw MafftOutputFormatError(
+                "MAFFT chunk '" + prefix + "' has an empty expected query identifier."
+            );
+        }
+        if (identifier == expected_ref_id) {
+            throw MafftOutputFormatError(
+                "MAFFT chunk '" + prefix + "' has a query identifier that conflicts with the reference identifier '" +
+                expected_ref_id + "'."
+            );
+        }
+        if (!expected_queries.insert(identifier).second) duplicate_expected_queries.insert(identifier);
+    }
+    if (!duplicate_expected_queries.empty()) {
+        throw MafftOutputFormatError(
+            "MAFFT chunk '" + prefix + "' has duplicate expected query identifiers: duplicates=" +
+            format_identifier_set(duplicate_expected_queries) + "."
+        );
+    }
 
     std::istringstream in(output);
     std::string line;
     size_t header_count = 0;
     bool seen_header = false;
     bool current_record_has_sequence = false;
+    std::vector<std::string> actual_record_ids;
 
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -73,6 +120,13 @@ void validate_mafft_fasta_output(
                     "MAFFT chunk '" + prefix + "' returned FASTA output with an empty header."
                 );
             }
+            const std::string identifier = fasta_primary_id(header);
+            if (identifier.empty()) {
+                throw MafftOutputFormatError(
+                    "MAFFT chunk '" + prefix + "' returned FASTA output with an empty primary identifier."
+                );
+            }
+            actual_record_ids.push_back(identifier);
             ++header_count;
             seen_header = true;
             current_record_has_sequence = false;
@@ -91,15 +145,51 @@ void validate_mafft_fasta_output(
             "MAFFT chunk '" + prefix + "' returned a FASTA record with an empty sequence."
         );
     }
-    if (expected_query_records == std::numeric_limits<size_t>::max()) {
+    if (expected_query_ids.size() == std::numeric_limits<size_t>::max()) {
         throw MafftOutputFormatError("MAFFT output record count exceeds the supported size range.");
     }
-    const size_t expected_headers = expected_query_records + 1;
+    const size_t expected_headers = expected_query_ids.size() + 1;
     if (header_count != expected_headers) {
         throw MafftOutputFormatError(
             "MAFFT chunk '" + prefix + "' returned " + std::to_string(header_count) +
             " FASTA records; expected " + std::to_string(expected_headers) +
             " (one reference plus all query records)."
+        );
+    }
+
+    if (actual_record_ids.empty() || actual_record_ids.front() != expected_ref_id) {
+        const std::string actual = actual_record_ids.empty() ? "<missing>" : actual_record_ids.front();
+        throw MafftOutputFormatError(
+            "MAFFT chunk '" + prefix + "' returned reference identifier '" + actual +
+            "' in the first record; expected '" + expected_ref_id + "'."
+        );
+    }
+
+    std::set<std::string> actual_queries;
+    std::set<std::string> duplicate_actual_queries;
+    for (size_t i = 1; i < actual_record_ids.size(); ++i) {
+        if (!actual_queries.insert(actual_record_ids[i]).second) {
+            duplicate_actual_queries.insert(actual_record_ids[i]);
+        }
+    }
+
+    std::set<std::string> missing;
+    std::set<std::string> unexpected;
+    std::set_difference(
+        expected_queries.begin(), expected_queries.end(),
+        actual_queries.begin(), actual_queries.end(),
+        std::inserter(missing, missing.end())
+    );
+    std::set_difference(
+        actual_queries.begin(), actual_queries.end(),
+        expected_queries.begin(), expected_queries.end(),
+        std::inserter(unexpected, unexpected.end())
+    );
+    if (!missing.empty() || !unexpected.empty() || !duplicate_actual_queries.empty()) {
+        throw MafftOutputFormatError(
+            "MAFFT chunk '" + prefix + "' returned a query identifier mismatch: missing=" +
+            format_identifier_set(missing) + ", unexpected=" + format_identifier_set(unexpected) +
+            ", duplicates=" + format_identifier_set(duplicate_actual_queries) + "."
         );
     }
 }
@@ -155,6 +245,9 @@ void record_runner_failure(
     bool save_failed_stderr) {
 
     result.success = false;
+    result.stdout_data.clear();
+    result.deleted_blocks.clear();
+    result.qc_sample_stats.clear();
     result.failure_reason = failure_reason;
     std::cerr << "Error: MAFFT chunk '" << prefix << "' failed [" << failure_reason << "]: "
               << message << "\n";
@@ -176,6 +269,8 @@ void record_runner_failure(
  * @param bucket_name Logical bucket recorded in reports and diagnostic names.
  * @param chunk_query_path Existing FASTA file containing the query chunk.
  * @param ref_path Existing reference FASTA passed to MAFFT.
+ * @param expected_ref_id Primary reference identifier expected as the first
+ *        MAFFT output record.
  * @param threads_per_mafft Thread count forwarded to MAFFT.
  * @param temp_dir Directory used for optional failure diagnostics.
  * @param save_failed_stderr Whether failed-process stderr should be persisted.
@@ -195,6 +290,7 @@ ChunkResult run_mafft_chunk(
     const std::string& bucket_name,
     const std::string& chunk_query_path,
     const std::string& ref_path,
+    const std::string& expected_ref_id,
     int threads_per_mafft,
     const std::string& temp_dir,
     bool save_failed_stderr,
@@ -234,18 +330,24 @@ ChunkResult run_mafft_chunk(
         result.slow = slow_chunk_sec > 0.0 && co.elapsed_sec >= slow_chunk_sec;
 
         if (co.exit_code == 0 && !co.timed_out) {
-            validate_mafft_fasta_output(co.out, result.record_count, prefix);
-            result.stdout_data = std::move(co.out);
-            result.success = true;
+            validate_mafft_fasta_output(co.out, expected_ref_id, result.seq_ids, prefix);
+
+            std::vector<DeletedBlock> validated_deleted_blocks;
+            std::unordered_map<std::string, QcStats> validated_qc_sample_stats;
 
             if (enable_qc) {
                 if (!file_exists(map_path)) {
                     throw MapoutIoError("MAFFT mapout file was not created: " + map_path + ".");
                 }
-                auto parsed = parse_map_to_deleted_blocks(map_path);
-                result.deleted_blocks = std::move(parsed.first);
-                result.qc_sample_stats = std::move(parsed.second);
+                auto parsed = parse_map_to_deleted_blocks(map_path, result.seq_ids);
+                validated_deleted_blocks = std::move(parsed.first);
+                validated_qc_sample_stats = std::move(parsed.second);
             }
+
+            result.stdout_data = std::move(co.out);
+            result.deleted_blocks = std::move(validated_deleted_blocks);
+            result.qc_sample_stats = std::move(validated_qc_sample_stats);
+            result.success = true;
         } else {
             result.success = false;
             if (co.timed_out) {
