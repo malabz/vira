@@ -28,6 +28,10 @@ Mapout parser failures, MAFFT launch/timeout/output failures, output alias
 protection, and successful alignment/QC boundary cases. Identity-integrity tests
 also verify:
 
+- the formal `--enable-mapout-qc` option, deprecated `--enable-qc` alias warning,
+  and byte-identical FASTA/TSV results through their shared implementation;
+- always-on input-QC reports and the absence of mapout-derived outputs when neither
+  mapout-QC option is supplied;
 - exact, case-sensitive MAFFT stdout reference and query primary IDs;
 - reference-first output with order-independent query sets and descriptive headers;
 - rejection of duplicate, missing, replaced, and unexpected stdout IDs;

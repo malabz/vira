@@ -10,7 +10,7 @@
 #include <vector>
 
 /**
- * @brief Writes every parsed deletion interval as a TSV report.
+ * @brief Writes every parsed mapout query projection-loss interval as a TSV report.
  * @param rows Rows to serialize in their current order.
  * @param path Destination path, truncated if it exists.
  * @throws std::runtime_error If the report cannot be created or fully written.
@@ -18,7 +18,7 @@
 void write_deleted_blocks_tsv(const std::vector<DeletedBlock>& rows, const std::string& path);
 
 /**
- * @brief Writes one post-alignment QC summary row per dispatched sample.
+ * @brief Writes one mapout projection-loss QC summary row per dispatched sample.
  * @param rows Rows to serialize in their current order.
  * @param path Destination path, truncated if it exists.
  * @throws std::runtime_error If the report cannot be created or fully written.
@@ -26,9 +26,9 @@ void write_deleted_blocks_tsv(const std::vector<DeletedBlock>& rows, const std::
 void write_sample_qc_summary_tsv(const std::vector<SampleRow>& rows, const std::string& path);
 
 /**
- * @brief Writes deletion intervals belonging to WARN or FAIL samples.
- * @param block_rows Parsed deletion intervals.
- * @param sample_row_map Post-alignment result keyed by sequence identifier.
+ * @brief Writes projection-loss intervals belonging to WARN or FAIL samples.
+ * @param block_rows Parsed original-query projection-loss intervals.
+ * @param sample_row_map Mapout projection-loss result keyed by sequence identifier.
  * @param path Destination path, truncated if it exists.
  * @throws std::runtime_error If the report cannot be created or fully written.
  * @note Blocks without a matching sample row and blocks from PASS samples are omitted.
@@ -43,7 +43,7 @@ void write_abnormal_deleted_blocks_tsv(
  * @brief Creates an MSA that excludes samples classified as FAIL.
  * @param full_msa_path Complete MSA whose first record is the shared reference.
  * @param filtered_msa_path Destination FASTA path, truncated if it exists.
- * @param sample_row_map Post-alignment QC rows keyed by effective identifier.
+ * @param sample_row_map Mapout projection-loss QC rows keyed by effective identifier.
  * @throws std::runtime_error If the input cannot be read or the output cannot
  *         be created or fully written.
  * @note The first FASTA record is always retained. Later records are retained
@@ -56,16 +56,16 @@ void make_filtered_msa(
 );
 
 /**
- * @brief Writes the complete input-QC audit joined with optional post-QC data.
+ * @brief Writes the complete input-QC audit joined with optional mapout-QC data.
  * @param rows Input records in original processing order.
- * @param post_qc Post-alignment rows keyed by effective identifier; absent rows
+ * @param mapout_qc Mapout projection-loss rows keyed by effective identifier; absent rows
  *        are emitted with empty metrics and `NA` QC level.
  * @param path Destination path, truncated if it exists.
  * @throws std::runtime_error If the report cannot be created or fully written.
  */
 void write_qc_summary_tsv(
     const std::vector<InputQcRow>& rows,
-    const std::unordered_map<std::string, SampleRow>& post_qc,
+    const std::unordered_map<std::string, SampleRow>& mapout_qc,
     const std::string& path
 );
 
@@ -87,17 +87,17 @@ void write_excluded_samples_tsv(const std::vector<InputQcRow>& rows, const std::
 void write_unaligned_samples_tsv(const std::vector<InputQcRow>& rows, const std::string& path);
 
 /**
- * @brief Writes records with an abnormal input, alignment, or post-QC status.
+ * @brief Writes records with an abnormal input, alignment, or mapout-QC status.
  * @param rows Input-QC rows after chunk completion statuses are applied.
- * @param post_qc Post-alignment rows keyed by effective identifier.
+ * @param mapout_qc Mapout projection-loss rows keyed by effective identifier.
  * @param path Destination path, truncated if it exists.
  * @throws std::runtime_error If the report cannot be created or fully written.
  * @note A record is abnormal when its decision is not `ALIGN`, its alignment
- *       status is not `ALIGNED`, or its post-QC level is WARN/FAIL.
+ *       status is not `ALIGNED`, or its mapout-QC level is WARN/FAIL.
  */
 void write_abnormal_samples_tsv(
     const std::vector<InputQcRow>& rows,
-    const std::unordered_map<std::string, SampleRow>& post_qc,
+    const std::unordered_map<std::string, SampleRow>& mapout_qc,
     const std::string& path
 );
 

@@ -3,7 +3,8 @@
  * @brief Implements execution and result collection for one MAFFT query chunk.
  *
  * The runner translates a chunk request into a MAFFT command, captures the
- * child process output, optionally parses `--mapout` quality data, and records
+ * child process output, optionally parses `--mapout` query projection-loss
+ * data, and records
  * process failures in a ChunkResult. Per-chunk query and map files are removed
  * on the normal return path regardless of the MAFFT exit status. Known runner
  * failures are logged with the chunk label and converted into explicit result
@@ -274,7 +275,8 @@ void record_runner_failure(
  * @param threads_per_mafft Thread count forwarded to MAFFT.
  * @param temp_dir Directory used for optional failure diagnostics.
  * @param save_failed_stderr Whether failed-process stderr should be persisted.
- * @param enable_qc Whether `--mapout` should be requested and parsed.
+ * @param enable_mapout_qc Whether `--mapout` should be requested and its query
+ *        projection-loss data parsed.
  * @param mafft_timeout_sec Timeout in seconds; zero disables the timeout.
  * @param slow_chunk_sec Elapsed-time threshold for marking the chunk slow;
  *        non-positive values disable slow marking.
@@ -282,7 +284,7 @@ void record_runner_failure(
  *        into the result.
  * @param total_bases Sum of query bases in the chunk.
  * @return A complete ChunkResult containing status, captured output, timing,
- *         identifiers, and optional post-alignment QC data.
+ *         identifiers, and optional mapout projection-loss QC data.
  * @note The query chunk and optional map file are removed before normal return.
  */
 ChunkResult run_mafft_chunk(
@@ -294,7 +296,7 @@ ChunkResult run_mafft_chunk(
     int threads_per_mafft,
     const std::string& temp_dir,
     bool save_failed_stderr,
-    bool enable_qc,
+    bool enable_mapout_qc,
     int mafft_timeout_sec,
     double slow_chunk_sec,
     std::vector<std::string> seq_ids,
@@ -312,7 +314,7 @@ ChunkResult run_mafft_chunk(
     const std::string prefix = prefix_oss.str();
 
     std::vector<std::string> cmd = {"mafft", "--anysymbol"};
-    if (enable_qc) cmd.push_back("--mapout");
+    if (enable_mapout_qc) cmd.push_back("--mapout");
     cmd.insert(cmd.end(), {
         "--6merpair",
         "--thread", std::to_string(threads_per_mafft),
@@ -332,21 +334,21 @@ ChunkResult run_mafft_chunk(
         if (co.exit_code == 0 && !co.timed_out) {
             validate_mafft_fasta_output(co.out, expected_ref_id, result.seq_ids, prefix);
 
-            std::vector<DeletedBlock> validated_deleted_blocks;
-            std::unordered_map<std::string, QcStats> validated_qc_sample_stats;
+            std::vector<DeletedBlock> validated_projection_loss_blocks;
+            std::unordered_map<std::string, QcStats> validated_mapout_qc_sample_stats;
 
-            if (enable_qc) {
+            if (enable_mapout_qc) {
                 if (!file_exists(map_path)) {
                     throw MapoutIoError("MAFFT mapout file was not created: " + map_path + ".");
                 }
                 auto parsed = parse_map_to_deleted_blocks(map_path, result.seq_ids);
-                validated_deleted_blocks = std::move(parsed.first);
-                validated_qc_sample_stats = std::move(parsed.second);
+                validated_projection_loss_blocks = std::move(parsed.first);
+                validated_mapout_qc_sample_stats = std::move(parsed.second);
             }
 
             result.stdout_data = std::move(co.out);
-            result.deleted_blocks = std::move(validated_deleted_blocks);
-            result.qc_sample_stats = std::move(validated_qc_sample_stats);
+            result.deleted_blocks = std::move(validated_projection_loss_blocks);
+            result.qc_sample_stats = std::move(validated_mapout_qc_sample_stats);
             result.success = true;
         } else {
             result.success = false;
@@ -378,6 +380,6 @@ ChunkResult run_mafft_chunk(
     }
 
     remove_temporary_file(chunk_query_path, "temporary query file", prefix);
-    if (enable_qc) remove_temporary_file(map_path, "temporary mapout file", prefix);
+    if (enable_mapout_qc) remove_temporary_file(map_path, "temporary mapout file", prefix);
     return result;
 }

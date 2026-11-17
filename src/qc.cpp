@@ -1,9 +1,14 @@
 /**
  * @file qc.cpp
- * @brief Implements parsing and classification of MAFFT `--mapout` quality data.
+ * @brief Implements parsing and classification of MAFFT `--mapout` query
+ * projection-loss data.
  *
- * Map records are converted into contiguous deleted blocks per sequence, then
- * summarized into lost-base counts and threshold-based PASS/WARN/FAIL levels.
+ * Map records whose third column is `-` are converted into contiguous intervals
+ * of original-query coordinates, then summarized into projection-loss counts
+ * and threshold-based PASS/WARN/FAIL levels. These intervals are not biological
+ * deletions: their left/right mapped coordinates are reference-alignment
+ * positions. The first-column residue character is validated as non-empty but
+ * is not retained, and this module does not recover unmapped query residues.
  * Blank and comment lines are accepted, while malformed structure or numeric
  * fields are rejected with path and line-number context.
  */
@@ -107,15 +112,18 @@ long long parse_mapout_integer(
 }
 
 /**
- * @brief Converts one sequence's ordered map records into deleted blocks and statistics.
+ * @brief Converts one sequence's ordered map records into projection-loss blocks and statistics.
  *
  * Adjacent `-` records form one block only when their original coordinates are
- * consecutive. The nearest non-deleted mapping on either side is recorded when
- * available; edge blocks leave the absent boundary string empty.
+ * consecutive. Thus block start/end coordinates are original-query positions.
+ * The nearest mapped reference-alignment position on either side is recorded
+ * when available; edge blocks leave the absent boundary string empty. The
+ * mapout first-column residue character is not stored or recovered.
  *
  * @param seq_id Identifier attached to every emitted DeletedBlock.
  * @param recs Ordered pairs of original coordinate and mapped reference value.
- * @return Deleted blocks together with aggregate lost-base statistics. Empty
+ * @return Projection-loss blocks together with aggregate counts of original
+ *         query positions whose third mapout column is `-`. Empty
  *         inputs or an empty identifier produce empty results.
  */
 std::pair<std::vector<DeletedBlock>, QcStats> flush_map_sequence(
@@ -182,7 +190,10 @@ std::pair<std::vector<DeletedBlock>, QcStats> flush_map_sequence(
  *
  * Sequence sections begin with `>`. Blank and comment lines are ignored. Data
  * rows outside a section, empty section identifiers, invalid field counts, and
- * invalid coordinates terminate parsing with a contextual exception.
+ * invalid coordinates terminate parsing with a contextual exception. The
+ * second data column is an original-query position; a `-` in the third column
+ * marks a query residue not retained in the fixed reference-alignment
+ * projection. Numeric third-column values are reference-alignment positions.
  */
 std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> parse_map_to_deleted_blocks(
     const std::string& map_path,

@@ -283,7 +283,8 @@ void print_configuration(
     std::cout << "Slow chunk warning threshold: " << args.slow_chunk_sec << " seconds\n";
     std::cout << "Temporary directory: " << temp_dir << "\n";
     std::cout << "Remove temporary directory: " << (args.cleanup ? "true" : "false") << "\n";
-    std::cout << "Post-alignment QC enabled: " << (args.enable_qc ? "true" : "false") << "\n";
+    std::cout << "MAFFT mapout projection-loss QC enabled: "
+              << (args.enable_mapout_qc ? "true" : "false") << "\n";
     std::cout << "Output order is completion-based: true\n";
     std::cout << "=====================\n\n";
 }
@@ -352,11 +353,11 @@ int main(int argc, char** argv) {
             {"Failed-chunks report", failed_chunks_path},
             {"Slow-chunks report", slow_chunks_path}
         };
-        if (args.enable_qc) {
-            output_targets.push_back({"Filtered MSA", filtered_msa_path});
-            output_targets.push_back({"Deleted-block report", deleted_blocks_path});
-            output_targets.push_back({"Sample-QC report", sample_qc_summary_path});
-            output_targets.push_back({"Abnormal deleted-block report", abnormal_deleted_blocks_path});
+        if (args.enable_mapout_qc) {
+            output_targets.push_back({"Mapout-QC non-FAIL MSA", filtered_msa_path});
+            output_targets.push_back({"Mapout projection-loss block report", deleted_blocks_path});
+            output_targets.push_back({"Mapout-QC sample report", sample_qc_summary_path});
+            output_targets.push_back({"Abnormal mapout projection-loss block report", abnormal_deleted_blocks_path});
         }
         validate_distinct_output_targets(output_targets, ref_file, query_file);
 
@@ -421,8 +422,8 @@ int main(int argc, char** argv) {
         used_effective_ids.insert(ref_record.id);
 
         std::map<std::string, SampleMeta> sample_meta;
-        std::vector<DeletedBlock> all_deleted_blocks;
-        std::unordered_map<std::string, QcStats> sample_qc_stats;
+        std::vector<DeletedBlock> all_projection_loss_blocks;
+        std::unordered_map<std::string, QcStats> mapout_qc_sample_stats;
         std::vector<ChunkResult> failed_chunks;
         std::vector<ChunkResult> slow_chunks;
 
@@ -454,12 +455,12 @@ int main(int argc, char** argv) {
                         input_rows[it->second].alignment_detail = label;
                     }
                 }
-                if (args.enable_qc) {
+                if (args.enable_mapout_qc) {
                     for (auto& row : res.deleted_blocks) {
                         row.bucket = res.bucket_name;
-                        all_deleted_blocks.push_back(std::move(row));
+                        all_projection_loss_blocks.push_back(std::move(row));
                     }
-                    for (auto& kv : res.qc_sample_stats) sample_qc_stats[kv.first] = kv.second;
+                    for (auto& kv : res.qc_sample_stats) mapout_qc_sample_stats[kv.first] = kv.second;
                 }
             } else {
                 for (const auto& seq_id : res.seq_ids) {
@@ -534,7 +535,7 @@ int main(int argc, char** argv) {
                 args.threads_per_mafft,
                 temp_dir,
                 args.save_failed_stderr,
-                args.enable_qc,
+                args.enable_mapout_qc,
                 args.mafft_timeout_sec,
                 args.slow_chunk_sec,
                 std::move(seq_ids),
@@ -621,13 +622,13 @@ int main(int argc, char** argv) {
         const double wait_elapsed = seconds_since(wait_start);
 
         std::unordered_map<std::string, SampleRow> sample_row_map;
-        if (args.enable_qc) {
-            write_deleted_blocks_tsv(all_deleted_blocks, deleted_blocks_path);
-            auto sample_rows = build_sample_qc_rows(sample_meta, sample_qc_stats, args);
+        if (args.enable_mapout_qc) {
+            write_deleted_blocks_tsv(all_projection_loss_blocks, deleted_blocks_path);
+            auto sample_rows = build_sample_qc_rows(sample_meta, mapout_qc_sample_stats, args);
             write_sample_qc_summary_tsv(sample_rows, sample_qc_summary_path);
             sample_row_map.reserve(sample_rows.size());
             for (const auto& row : sample_rows) sample_row_map[row.seq_id] = row;
-            write_abnormal_deleted_blocks_tsv(all_deleted_blocks, sample_row_map, abnormal_deleted_blocks_path);
+            write_abnormal_deleted_blocks_tsv(all_projection_loss_blocks, sample_row_map, abnormal_deleted_blocks_path);
             make_filtered_msa(final_out, filtered_msa_path, sample_row_map);
         }
 
@@ -663,11 +664,11 @@ int main(int argc, char** argv) {
         std::cout << "Failed chunk list: " << failed_chunks_path << "\n";
         std::cout << "Slow chunk list: " << slow_chunks_path << "\n";
 
-        if (args.enable_qc) {
-            std::cout << "MAFFT mapout deleted blocks: " << deleted_blocks_path << "\n";
-            std::cout << "Post-alignment QC summary: " << sample_qc_summary_path << "\n";
-            std::cout << "Abnormal deletion-block summary: " << abnormal_deleted_blocks_path << "\n";
-            std::cout << "Recommended filtered MSA: " << filtered_msa_path << "\n";
+        if (args.enable_mapout_qc) {
+            std::cout << "MAFFT mapout projection-loss blocks: " << deleted_blocks_path << "\n";
+            std::cout << "Mapout projection-loss QC summary: " << sample_qc_summary_path << "\n";
+            std::cout << "Abnormal mapout projection-loss blocks: " << abnormal_deleted_blocks_path << "\n";
+            std::cout << "Mapout-QC non-FAIL MSA (PASS and WARN retained): " << filtered_msa_path << "\n";
         }
 
         if (!failed_chunks.empty()) {

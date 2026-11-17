@@ -91,8 +91,11 @@ Layer 2: virology suitability:
   --engineered-keywords CSV            Header keywords suggesting engineered constructs
   --align-review-samples               Also align suspected non-target/engineered records
 
-MAFFT --mapout post-alignment QC:
-  --enable-qc                          Enable QC based on MAFFT --mapout
+MAFFT mapout projection-loss QC:
+  --enable-mapout-qc                   Enable MAFFT --mapout and audit query residues not retained
+                                       in fixed reference-alignment coordinates; writes mapout-derived
+                                       reports and a non-FAIL filtered MSA (input QC is always on)
+  --enable-qc                          Deprecated alias for --enable-mapout-qc
   --warn-lost-ratio FLOAT              WARN if lost_ratio >= value [0.001]
   --fail-lost-ratio FLOAT              FAIL if lost_ratio >= value [0.01]
   --warn-max-block-len INT             WARN if max_lost_block_len >= value [20]
@@ -101,8 +104,35 @@ MAFFT --mapout post-alignment QC:
 
 Examples:
   ./vira -r ref.fasta -q query.fasta -o result.fasta
-  ./vira -r ref.fasta -q query.fasta -o result.fasta --enable-qc --mafft-timeout-sec 1800
+  ./vira -r ref.fasta -q query.fasta -o result.fasta --enable-mapout-qc --mafft-timeout-sec 1800
 ```
+
+### Quality-control scope
+
+#### Always-on input screening
+
+Input screening runs whether or not mapout QC is enabled. It applies the configured
+identifier and duplicate-ID policy, allowed-character checks, N-ratio and length-ratio
+rules, and header-keyword screening before records are dispatched to MAFFT.
+
+#### Optional MAFFT mapout projection-loss QC
+
+`--enable-mapout-qc` adds MAFFT `--mapout` to the existing `--keeplength`
+alignment command. In a MAFFT mapout row, column three is the reference-alignment
+position. A `-` in that column means that the residue at the corresponding original
+query position was not retained in the fixed reference-alignment-coordinate output.
+These positions usually mainly reflect query insertions relative to the reference
+that `--keeplength` omits.
+
+ViRA summarizes the affected original-query positions as counts and contiguous
+intervals, together with their flanking reference-alignment positions. This is not
+a biological deletion call, and it does not assess substitutions, alignment identity,
+overall gap quality, coverage, or site confidence. ViRA does not store or recover the
+actual unmapped residue characters. The raw per-chunk `.map` files are temporary and
+are not retained as final outputs.
+
+`--enable-qc` remains available as a deprecated compatibility alias and has exactly
+the same behavior as `--enable-mapout-qc`; it emits a deprecation warning on stderr.
 
 ## 🔬Output files
 
@@ -117,14 +147,14 @@ Output|Description
 `PREFIX.failed_chunks.tsv`|Failed or timed-out MAFFT chunks
 `PREFIX.slow_chunks.tsv`|Chunks slower than the configured threshold
 
-When `--enable-qc` is used, the post-alignment MAFFT `--mapout` outputs are also written.
+When `--enable-mapout-qc` is used, mapout-derived reports are written.
 
 Output|Description
 :---:|:---
-`PREFIX.filtered.fasta`|Filtered final MSA
-`PREFIX.deleted_blocks.tsv`|Deleted block information parsed from MAFFT mapout
-`PREFIX.sample_qc_summary.tsv`|Per-sample post-alignment QC summary
-`PREFIX.abnormal_deleted_blocks.tsv`|Abnormal deleted blocks detected by post-alignment QC
+`PREFIX.filtered.fasta`|Mapout-QC non-FAIL MSA; reference plus PASS/WARN samples; FAIL samples excluded
+`PREFIX.deleted_blocks.tsv`|Contiguous original-query intervals whose MAFFT mapout reference-alignment position is `-`
+`PREFIX.sample_qc_summary.tsv`|Per-aligned-sample mapout projection-loss metrics and PASS/WARN/FAIL classification
+`PREFIX.abnormal_deleted_blocks.tsv`|Projection-loss blocks belonging to WARN/FAIL samples
 
 ## 📍Reminder
 

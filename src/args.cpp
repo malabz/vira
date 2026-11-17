@@ -52,8 +52,11 @@ void print_usage(const char* prog) {
     std::printf("  --non-target-keywords CSV            Header keywords suggesting non-target species\n");
     std::printf("  --engineered-keywords CSV            Header keywords suggesting engineered constructs\n");
     std::printf("  --align-review-samples               Also align suspected non-target/engineered records\n\n");
-    std::printf("MAFFT --mapout post-alignment QC:\n");
-    std::printf("  --enable-qc                          Enable QC based on MAFFT --mapout\n");
+    std::printf("MAFFT mapout projection-loss QC:\n");
+    std::printf("  --enable-mapout-qc                   Enable MAFFT --mapout and audit query residues not retained\n");
+    std::printf("                                       in fixed reference-alignment coordinates; writes mapout-derived\n");
+    std::printf("                                       reports and a non-FAIL filtered MSA (input QC is always on)\n");
+    std::printf("  --enable-qc                          Deprecated alias for --enable-mapout-qc\n");
     std::printf("  --warn-lost-ratio FLOAT              WARN if lost_ratio >= value [0.001]\n");
     std::printf("  --fail-lost-ratio FLOAT              FAIL if lost_ratio >= value [0.01]\n");
     std::printf("  --warn-max-block-len INT             WARN if max_lost_block_len >= value [20]\n");
@@ -67,14 +70,14 @@ void print_usage(const char* prog) {
     std::printf("    PREFIX.abnormal_samples.tsv\n");
     std::printf("    PREFIX.failed_chunks.tsv\n");
     std::printf("    PREFIX.slow_chunks.tsv\n");
-    std::printf("  With --enable-qc, additional files are written:\n");
+    std::printf("  With --enable-mapout-qc, additional mapout-derived files are written:\n");
     std::printf("    PREFIX.filtered.fasta\n");
     std::printf("    PREFIX.deleted_blocks.tsv\n");
     std::printf("    PREFIX.sample_qc_summary.tsv\n");
     std::printf("    PREFIX.abnormal_deleted_blocks.tsv\n\n");
     std::printf("Examples:\n");
     std::printf("  %s -r ref.fasta -q query.fasta -o result.fasta\n", prog);
-    std::printf("  %s -r ref.fasta -q query.fasta -o result.fasta --enable-qc --mafft-timeout-sec 1800\n\n", prog);
+    std::printf("  %s -r ref.fasta -q query.fasta -o result.fasta --enable-mapout-qc --mafft-timeout-sec 1800\n\n", prog);
     std::printf("Other:\n");
     std::printf("  -h, --help                           Show this help message and exit\n");
 }
@@ -178,6 +181,7 @@ double parse_double(const std::string& s, const std::string& option) {
 
 Args parse_args(int argc, char** argv) {
     Args args;
+    bool deprecated_enable_qc_warning_emitted = false;
 
     if (argc == 1) {
         print_usage(argv[0]);
@@ -206,7 +210,19 @@ Args parse_args(int argc, char** argv) {
         if (opt == "--save-failed-stderr") { args.save_failed_stderr = true; continue; }
         if (opt == "--disable-auto-chunk") { args.disable_auto_chunk = true; continue; }
         if (opt == "--max-pending-factor") { args.max_pending_factor = parse_int(read_value(i, argc, argv, opt), opt); continue; }
-        if (opt == "--enable-qc") { args.enable_qc = true; continue; }
+        if (opt == "--enable-mapout-qc") { args.enable_mapout_qc = true; continue; }
+        if (opt == "--enable-qc") {
+            args.enable_mapout_qc = true;
+            if (!deprecated_enable_qc_warning_emitted) {
+                std::fprintf(
+                    stderr,
+                    "Warning: --enable-qc is deprecated because its scope is ambiguous; "
+                    "use --enable-mapout-qc.\n"
+                );
+                deprecated_enable_qc_warning_emitted = true;
+            }
+            continue;
+        }
         if (opt == "--warn-lost-ratio") { args.warn_lost_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
         if (opt == "--fail-lost-ratio") { args.fail_lost_ratio = parse_double(read_value(i, argc, argv, opt), opt); continue; }
         if (opt == "--warn-max-block-len") { args.warn_max_block_len = parse_int(read_value(i, argc, argv, opt), opt); continue; }
@@ -262,13 +278,13 @@ Args parse_args(int argc, char** argv) {
     }
     if (args.warn_lost_ratio < 0.0 || args.warn_lost_ratio > 1.0 ||
         args.fail_lost_ratio < 0.0 || args.fail_lost_ratio > 1.0) {
-        throw std::invalid_argument("Post-alignment lost-ratio thresholds must be within [0, 1].");
+        throw std::invalid_argument("Mapout projection-loss ratio thresholds must be within [0, 1].");
     }
     if (args.warn_lost_ratio > args.fail_lost_ratio) {
         throw std::invalid_argument("--warn-lost-ratio cannot exceed --fail-lost-ratio.");
     }
     if (args.warn_max_block_len < 0 || args.fail_max_block_len < 0) {
-        throw std::invalid_argument("Post-alignment block-length thresholds must be non-negative.");
+        throw std::invalid_argument("Mapout projection-loss block-length thresholds must be non-negative.");
     }
     if (args.warn_max_block_len > args.fail_max_block_len) {
         throw std::invalid_argument("--warn-max-block-len cannot exceed --fail-max-block-len.");

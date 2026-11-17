@@ -210,7 +210,7 @@ private:
         const auto& blocks = parsed.first;
         const auto& stats = parsed.second;
 
-        check(blocks.size() == 2, "valid mapout should produce two deleted blocks");
+        check(blocks.size() == 2, "valid mapout should produce two projection-loss blocks");
         check(stats.size() == 2, "valid mapout should produce statistics for two samples");
 
         const auto sample1 = stats.find("sample1");

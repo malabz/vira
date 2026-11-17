@@ -39,30 +39,30 @@ void close_output_or_throw(std::ofstream& out, const std::string& path, const st
 /**
  * @brief Writes the shared input-QC TSV header.
  * @param f Open output stream receiving the header.
- * @param include_post_qc Whether post-alignment metric columns are appended.
+ * @param include_mapout_qc Whether mapout projection-loss metric columns are appended.
  */
-void write_input_qc_header(std::ofstream& f, bool include_post_qc) {
+void write_input_qc_header(std::ofstream& f, bool include_mapout_qc) {
     f << "original_id\tseq_id\theader\tbucket\tseq_len\tlen_diff_ratio\tn_ratio\tinput_decision\tinput_reasons\tneeds_manual_review\talignment_status\talignment_detail";
-    if (include_post_qc) {
+    if (include_mapout_qc) {
         f << "\tlost_count\tlost_ratio\tlost_block_count\tmax_lost_block_len\tpost_alignment_qc";
     }
     f << '\n';
 }
 
 /**
- * @brief Serializes one input-QC row with optional post-alignment metrics.
+ * @brief Serializes one input-QC row with optional mapout projection-loss metrics.
  * @param f Open output stream receiving the row.
  * @param r Input decision and alignment status to serialize.
- * @param post_qc Post-alignment metrics keyed by final sequence identifier.
- * @param include_post_qc Whether post-alignment columns are emitted. When no
+ * @param mapout_qc Mapout projection-loss metrics keyed by final sequence identifier.
+ * @param include_mapout_qc Whether mapout-derived columns are emitted. When no
  *        matching metrics exist, numeric fields remain empty and the QC level
  *        is written as `NA`.
  */
 void write_input_qc_row(
     std::ofstream& f,
     const InputQcRow& r,
-    const std::unordered_map<std::string, SampleRow>& post_qc,
-    bool include_post_qc) {
+    const std::unordered_map<std::string, SampleRow>& mapout_qc,
+    bool include_mapout_qc) {
     f << sanitize_tsv_field(r.original_id) << '\t'
       << sanitize_tsv_field(r.seq_id) << '\t'
       << sanitize_tsv_field(r.header) << '\t'
@@ -76,9 +76,9 @@ void write_input_qc_row(
       << r.alignment_status << '\t'
       << sanitize_tsv_field(r.alignment_detail);
 
-    if (include_post_qc) {
-        auto it = post_qc.find(r.seq_id);
-        if (it == post_qc.end()) {
+    if (include_mapout_qc) {
+        auto it = mapout_qc.find(r.seq_id);
+        if (it == mapout_qc.end()) {
             f << "\t\t\t\t\tNA";
         } else {
             const auto& q = it->second;
@@ -95,28 +95,28 @@ void write_input_qc_row(
 /**
  * @brief Determines whether a sample belongs in the abnormal-sample report.
  * @param r Input-QC and alignment state for the sample.
- * @param post_qc Optional post-alignment QC rows keyed by sequence identifier.
+ * @param mapout_qc Optional mapout projection-loss QC rows keyed by sequence identifier.
  * @return `true` for any non-ALIGN decision, non-ALIGNED status, or available
- *         post-alignment WARN/FAIL result; otherwise `false`.
+ *         mapout-QC WARN/FAIL result; otherwise `false`.
  */
 bool is_abnormal(
     const InputQcRow& r,
-    const std::unordered_map<std::string, SampleRow>& post_qc) {
+    const std::unordered_map<std::string, SampleRow>& mapout_qc) {
     if (r.decision != "ALIGN") return true;
     if (r.alignment_status != "ALIGNED") return true;
-    auto it = post_qc.find(r.seq_id);
-    return it != post_qc.end() && (it->second.qc_level == "WARN" || it->second.qc_level == "FAIL");
+    auto it = mapout_qc.find(r.seq_id);
+    return it != mapout_qc.end() && (it->second.qc_level == "WARN" || it->second.qc_level == "FAIL");
 }
 }
 
 void write_deleted_blocks_tsv(const std::vector<DeletedBlock>& rows, const std::string& path) {
-    std::ofstream f = open_output_or_throw(path, "deleted-block report");
+    std::ofstream f = open_output_or_throw(path, "mapout projection-loss block report");
     f << "seq_id\tbucket\tblock_start_orig\tblock_end_orig\tblock_len\tleft_ref_pos\tright_ref_pos\n";
     for (const auto& r : rows) {
         f << r.seq_id << '\t' << r.bucket << '\t' << r.block_start_orig << '\t' << r.block_end_orig << '\t'
           << r.block_len << '\t' << r.left_ref_pos << '\t' << r.right_ref_pos << '\n';
     }
-    close_output_or_throw(f, path, "deleted-block report");
+    close_output_or_throw(f, path, "mapout projection-loss block report");
 }
 
 void write_sample_qc_summary_tsv(const std::vector<SampleRow>& rows, const std::string& path) {
@@ -135,7 +135,7 @@ void write_abnormal_deleted_blocks_tsv(
     const std::unordered_map<std::string, SampleRow>& sample_row_map,
     const std::string& path) {
 
-    std::ofstream f = open_output_or_throw(path, "abnormal deleted-block report");
+    std::ofstream f = open_output_or_throw(path, "abnormal mapout projection-loss block report");
     f << "seq_id\tbucket\tqc_level\tblock_start_orig\tblock_end_orig\tblock_len\tleft_ref_pos\tright_ref_pos\n";
     for (const auto& r : block_rows) {
         auto it = sample_row_map.find(r.seq_id);
@@ -145,7 +145,7 @@ void write_abnormal_deleted_blocks_tsv(
               << r.block_end_orig << '\t' << r.block_len << '\t' << r.left_ref_pos << '\t' << r.right_ref_pos << '\n';
         }
     }
-    close_output_or_throw(f, path, "abnormal deleted-block report");
+    close_output_or_throw(f, path, "abnormal mapout projection-loss block report");
 }
 
 /**
@@ -190,12 +190,12 @@ void make_filtered_msa(
 
 void write_qc_summary_tsv(
     const std::vector<InputQcRow>& rows,
-    const std::unordered_map<std::string, SampleRow>& post_qc,
+    const std::unordered_map<std::string, SampleRow>& mapout_qc,
     const std::string& path) {
     std::ofstream f = open_output_or_throw(path, "QC summary report");
     f << std::fixed << std::setprecision(8);
     write_input_qc_header(f, true);
-    for (const auto& r : rows) write_input_qc_row(f, r, post_qc, true);
+    for (const auto& r : rows) write_input_qc_row(f, r, mapout_qc, true);
     close_output_or_throw(f, path, "QC summary report");
 }
 
@@ -223,13 +223,13 @@ void write_unaligned_samples_tsv(const std::vector<InputQcRow>& rows, const std:
 
 void write_abnormal_samples_tsv(
     const std::vector<InputQcRow>& rows,
-    const std::unordered_map<std::string, SampleRow>& post_qc,
+    const std::unordered_map<std::string, SampleRow>& mapout_qc,
     const std::string& path) {
     std::ofstream f = open_output_or_throw(path, "abnormal-samples report");
     f << std::fixed << std::setprecision(8);
     write_input_qc_header(f, true);
     for (const auto& r : rows) {
-        if (is_abnormal(r, post_qc)) write_input_qc_row(f, r, post_qc, true);
+        if (is_abnormal(r, mapout_qc)) write_input_qc_row(f, r, mapout_qc, true);
     }
     close_output_or_throw(f, path, "abnormal-samples report");
 }

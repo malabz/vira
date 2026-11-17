@@ -12,7 +12,7 @@
  * @brief Aligns one query chunk to the shared reference with MAFFT.
  *
  * The function captures stdout/stderr, enforces an optional timeout, optionally
- * parses MAFFT mapout QC data, and removes the per-chunk query and map files
+ * parses MAFFT mapout projection-loss data, and removes the per-chunk query and map files
  * before returning.
  *
  * @param chunk_id Zero-based identifier within @p bucket_name.
@@ -23,13 +23,13 @@
  * @param threads_per_mafft Positive thread count passed to MAFFT.
  * @param temp_dir Existing directory used for optional failure diagnostics.
  * @param save_failed_stderr Persist stderr when MAFFT fails or throws.
- * @param enable_qc Request `--mapout` and parse the resulting map file.
+ * @param enable_mapout_qc Request `--mapout` and parse its query projection-loss data.
  * @param mafft_timeout_sec Timeout in seconds; zero disables timeout handling.
  * @param slow_chunk_sec Inclusive elapsed-time threshold; non-positive disables slow marking.
  * @param seq_ids Effective query identifiers in chunk order; moved into the result.
  * @param total_bases Sum of query-sequence lengths in the chunk.
  * @return A ChunkResult describing success, timing, output, diagnostics, and
- *         optional post-alignment QC data.
+ *         optional mapout projection-loss QC data.
  * @note Known process, malformed-output, system, and mapout failures are converted
  *       into a failed result and logged with the chunk label rather than propagated. When
  *       @p save_failed_stderr is true, @ref ChunkResult::err_path is populated
@@ -47,7 +47,7 @@ ChunkResult run_mafft_chunk(
     int threads_per_mafft,
     const std::string& temp_dir,
     bool save_failed_stderr,
-    bool enable_qc,
+    bool enable_mapout_qc,
     int mafft_timeout_sec,
     double slow_chunk_sec,
     std::vector<std::string> seq_ids,

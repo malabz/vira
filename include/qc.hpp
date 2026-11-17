@@ -1,6 +1,6 @@
 /**
  * @file qc.hpp
- * @brief MAFFT mapout parsing and post-alignment quality classification.
+ * @brief MAFFT mapout parsing and query projection-loss classification.
  */
 #pragma once
 #include "common.hpp"
@@ -25,11 +25,13 @@ public:
 };
 
 /**
- * @brief Parses MAFFT mapout data into deletion blocks and per-sample totals.
+ * @brief Parses MAFFT mapout data into unmapped-query blocks and per-sample totals.
  * @param map_path Path to a MAFFT `.map` file.
  * @param expected_seq_ids Exact primary-identifier set dispatched in the chunk.
- * @return Pair containing all contiguous lost intervals and statistics keyed by
- *         sequence identifier.
+ * @return Pair containing contiguous original-query intervals whose mapout
+ *         reference-alignment position is `-`, plus statistics keyed by sequence
+ *         identifier. The first-column residue character is not retained, and
+ *         this module does not recover unmapped residues.
  * @throws MapoutIoError If the file cannot be opened or a read operation fails.
  * @throws MapoutFormatError If a section identifier, field count, or numeric
  *         field is malformed, expected identifiers are not unique, or the
@@ -42,9 +44,10 @@ std::pair<std::vector<DeletedBlock>, std::unordered_map<std::string, QcStats>> p
 );
 
 /**
- * @brief Classifies post-alignment loss metrics using configured thresholds.
- * @param lost_ratio Fraction of original sequence positions lost in alignment.
- * @param max_lost_block_len Longest contiguous lost interval.
+ * @brief Classifies mapout query projection-loss metrics using configured thresholds.
+ * @param lost_ratio Fraction of original query positions whose third mapout
+ *        column is `-`.
+ * @param max_lost_block_len Longest contiguous interval of such query positions.
  * @param args Validated WARN and FAIL thresholds.
  * @return `FAIL` when either fail threshold is met, otherwise `WARN` when either
  *         warning threshold is met, otherwise `PASS`.
@@ -55,8 +58,9 @@ std::string assign_qc_level(double lost_ratio, long long max_lost_block_len, con
 /**
  * @brief Combines input metadata and mapout statistics into sample QC rows.
  * @param sample_meta Ordered metadata keyed by effective sequence identifier.
- * @param sample_qc_stats Parsed loss statistics keyed by sequence identifier.
- * @param args Validated post-alignment QC thresholds.
+ * @param sample_qc_stats Parsed mapout projection-loss statistics keyed by
+ *        sequence identifier.
+ * @param args Validated mapout projection-loss QC thresholds.
  * @return One row per metadata entry that also has validated mapout statistics,
  *         preserving metadata map-key order.
  * @note Missing statistics are omitted rather than converted to zero-loss PASS.

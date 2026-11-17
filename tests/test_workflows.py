@@ -14,6 +14,32 @@ import unittest
 
 VIRA_BINARY = os.environ.get("VIRA_TEST_BINARY")
 
+DEPRECATED_MAPOUT_QC_WARNING = (
+    "Warning: --enable-qc is deprecated because its scope is ambiguous; "
+    "use --enable-mapout-qc."
+)
+
+MAPOUT_QC_SUFFIXES = (
+    ".filtered.fasta",
+    ".deleted_blocks.tsv",
+    ".sample_qc_summary.tsv",
+    ".abnormal_deleted_blocks.tsv",
+)
+
+ALL_OUTPUT_SUFFIXES = (
+    "",  # The requested full MSA.
+    ".filtered.fasta",
+    ".qc_summary.tsv",
+    ".excluded_samples.tsv",
+    ".unaligned_samples.tsv",
+    ".abnormal_samples.tsv",
+    ".deleted_blocks.tsv",
+    ".sample_qc_summary.tsv",
+    ".abnormal_deleted_blocks.tsv",
+    ".failed_chunks.tsv",
+    ".slow_chunks.tsv",
+)
+
 
 MOCK_MAFFT = r"""#!/usr/bin/env python3
 from pathlib import Path
@@ -222,7 +248,7 @@ class WorkflowTests(unittest.TestCase):
     ) -> subprocess.CompletedProcess[str]:
         return self.run_vira(
             output,
-            "--enable-qc",
+            "--enable-mapout-qc",
             "--disable-auto-chunk",
             "--chunk-size", "1000",
             "--max-instances", "1",
@@ -278,13 +304,19 @@ class WorkflowTests(unittest.TestCase):
             self.reference.read_text(encoding="utf-8") + self.query.read_text(encoding="utf-8"),
         )
         self.assertTrue((self.root / "normal.qc_summary.tsv").is_file())
+        for suffix in MAPOUT_QC_SUFFIXES:
+            with self.subTest(suffix=suffix):
+                self.assertFalse(self.report_path(output, suffix).exists())
 
     def test_mock_alignment_with_mapout_qc_succeeds(self) -> None:
         output = self.root / "with-qc.fasta"
-        result = self.run_vira(output, "--enable-qc")
+        result = self.run_vira(output, "--enable-mapout-qc")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         filtered = self.root / "with-qc.filtered.fasta"
         summary = self.root / "with-qc.sample_qc_summary.tsv"
+        for suffix in MAPOUT_QC_SUFFIXES:
+            with self.subTest(suffix=suffix):
+                self.assertTrue(self.report_path(output, suffix).is_file())
         self.assertEqual(filtered.read_text(encoding="utf-8").count(">"), 2)
         self.assertIn("PASS", summary.read_text(encoding="utf-8"))
         self.assertEqual(
@@ -295,6 +327,40 @@ class WorkflowTests(unittest.TestCase):
             summary.read_text(encoding="utf-8").splitlines()[0],
             "seq_id\tbucket\tseq_len\tlen_diff_ratio\tn_ratio\tlost_count\tlost_ratio\tlost_block_count\tmax_lost_block_len\tqc_level",
         )
+
+    def test_deprecated_mapout_qc_alias_warns_and_matches_new_option(self) -> None:
+        new_output = self.root / "new-option.fasta"
+        old_output = self.root / "old-option.fasta"
+
+        new_result = self.run_vira(new_output, "--enable-mapout-qc")
+        old_result = self.run_vira(old_output, "--enable-qc")
+
+        self.assertEqual(new_result.returncode, 0, new_result.stdout + new_result.stderr)
+        self.assertEqual(old_result.returncode, 0, old_result.stdout + old_result.stderr)
+        self.assertNotIn(DEPRECATED_MAPOUT_QC_WARNING, new_result.stderr)
+        self.assertEqual(old_result.stderr.count(DEPRECATED_MAPOUT_QC_WARNING), 1)
+
+        for suffix in ALL_OUTPUT_SUFFIXES:
+            with self.subTest(suffix=suffix):
+                new_path = new_output if not suffix else self.report_path(new_output, suffix)
+                old_path = old_output if not suffix else self.report_path(old_output, suffix)
+                self.assertTrue(new_path.is_file())
+                self.assertTrue(old_path.is_file())
+                self.assertEqual(new_path.read_bytes(), old_path.read_bytes())
+
+    def test_new_and_deprecated_mapout_qc_options_together_warn_once(self) -> None:
+        output = self.root / "both-options.fasta"
+        result = self.run_vira(
+            output,
+            "--enable-mapout-qc",
+            "--enable-qc",
+            "--enable-qc",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr.count(DEPRECATED_MAPOUT_QC_WARNING), 1)
+        for suffix in MAPOUT_QC_SUFFIXES:
+            with self.subTest(suffix=suffix):
+                self.assertTrue(self.report_path(output, suffix).is_file())
 
     def test_stdout_identity_exact_match_succeeds(self) -> None:
         query = self.make_two_query_fixture()

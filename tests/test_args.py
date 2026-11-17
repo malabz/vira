@@ -59,6 +59,17 @@ class ArgsValidationTests(unittest.TestCase):
         except subprocess.TimeoutExpired as error:
             self.fail(f"ViRA hung while validating arguments: {error.cmd}")
 
+    def run_help(self) -> subprocess.CompletedProcess[str]:
+        """Return the standalone help output without requiring input files."""
+        return subprocess.run(
+            [str(self.binary), "--help"],
+            cwd=self.workdir,
+            capture_output=True,
+            text=True,
+            timeout=self.TIMEOUT_SECONDS,
+            check=False,
+        )
+
     def assert_invalid(self, args: tuple[str, ...], expected_message: str) -> None:
         """Assert a parser failure is contextual, prompt, and not signal-driven."""
         result = self.run_cli(*args)
@@ -156,10 +167,10 @@ class ArgsValidationTests(unittest.TestCase):
             with self.subTest(args=args):
                 self.assert_invalid(args, expected)
 
-    def test_rejects_invalid_post_alignment_qc_thresholds(self) -> None:
+    def test_rejects_invalid_mapout_qc_thresholds(self) -> None:
         cases = (
-            (("--warn-lost-ratio", "-0.1"), "lost-ratio thresholds must be within [0, 1]"),
-            (("--fail-lost-ratio", "1.1"), "lost-ratio thresholds must be within [0, 1]"),
+            (("--warn-lost-ratio", "-0.1"), "Mapout projection-loss ratio thresholds must be within [0, 1]"),
+            (("--fail-lost-ratio", "1.1"), "Mapout projection-loss ratio thresholds must be within [0, 1]"),
             (
                 ("--warn-lost-ratio", "0.5", "--fail-lost-ratio", "0.4"),
                 "--warn-lost-ratio cannot exceed --fail-lost-ratio",
@@ -184,6 +195,16 @@ class ArgsValidationTests(unittest.TestCase):
         for args, expected in cases:
             with self.subTest(args=args):
                 self.assert_invalid(args, expected)
+
+    def test_help_documents_mapout_qc_and_deprecated_alias(self) -> None:
+        result = self.run_help()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("MAFFT mapout projection-loss QC:", result.stdout)
+        self.assertIn("--enable-mapout-qc", result.stdout)
+        self.assertRegex(
+            result.stdout,
+            r"--enable-qc[^\n]*[Dd]eprecated alias",
+        )
 
     def test_accepts_exact_numeric_boundaries(self) -> None:
         result = self.run_cli(

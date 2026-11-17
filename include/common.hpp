@@ -18,7 +18,7 @@ using Clock = std::chrono::steady_clock;
  *
  * Default member values define the CLI defaults. Ratio fields are expressed as
  * fractions rather than percentages. Input-QC ratios are range-checked by
- * parse_args(); post-alignment warning and failure thresholds are used as supplied.
+ * parse_args(); mapout projection-loss warning and failure thresholds are used as supplied.
  */
 struct Args {
     std::string ref;                    ///< Reference FASTA path; exactly one sequence is required.
@@ -33,11 +33,11 @@ struct Args {
     bool save_failed_stderr = false;    ///< Persist stderr for failed chunks in the temporary directory.
     bool disable_auto_chunk = false;    ///< Use @ref chunk_size without adaptive reduction.
     int max_pending_factor = 2;         ///< Pending-job limit multiplier relative to @ref max_instances.
-    bool enable_qc = false;             ///< Request MAFFT mapout parsing and post-alignment QC reports.
-    double warn_lost_ratio = 0.001;     ///< Inclusive lost-base ratio threshold for WARN.
-    double fail_lost_ratio = 0.01;      ///< Inclusive lost-base ratio threshold for FAIL.
-    int warn_max_block_len = 20;        ///< Inclusive maximum-deletion-block threshold for WARN.
-    int fail_max_block_len = 100;       ///< Inclusive maximum-deletion-block threshold for FAIL.
+    bool enable_mapout_qc = false;      ///< Enable MAFFT mapout projection-loss auditing and derived reports.
+    double warn_lost_ratio = 0.001;     ///< Inclusive unmapped-query-position ratio threshold for WARN.
+    double fail_lost_ratio = 0.01;      ///< Inclusive unmapped-query-position ratio threshold for FAIL.
+    int warn_max_block_len = 20;        ///< Inclusive maximum unmapped-query-block threshold for WARN.
+    int fail_max_block_len = 100;       ///< Inclusive maximum unmapped-query-block threshold for FAIL.
 
     /** @name Layer 1: input quality control */
     ///@{
@@ -78,7 +78,7 @@ struct FastaRecord {
     std::string seq;    ///< Concatenated sequence characters, without line terminators.
 };
 
-/** @brief Sequence attributes retained for post-alignment QC reporting. */
+/** @brief Sequence attributes retained for mapout projection-loss QC reporting. */
 struct SampleMeta {
     std::string bucket;          ///< Dispatch bucket name; currently `all` for the unified queue.
     size_t seq_len = 0;          ///< Original query length in characters.
@@ -107,43 +107,51 @@ struct InputQcRow {
     std::string alignment_detail;  ///< Chunk label and, for failures, the failure reason.
 };
 
-/** @brief One contiguous query interval that MAFFT mapout marks as lost. */
+/**
+ * @brief One contiguous original-query interval whose mapout reference-alignment
+ *        position (column three) is `-`.
+ *
+ * Despite the retained compatibility name, this is not a biological deletion.
+ * Block start/end coordinates belong to the original query; left/right reference
+ * positions belong to the fixed reference alignment. The query-base character from
+ * mapout column one is not stored, and ViRA does not recover unmapped bases.
+ */
 struct DeletedBlock {
     std::string seq_id;              ///< Query identifier reported by mapout.
     std::string bucket;              ///< Dispatch bucket copied from the originating chunk.
-    long long block_start_orig = 0;  ///< Original-sequence coordinate at the start of the interval.
-    long long block_end_orig = 0;    ///< Original-sequence coordinate at the end of the interval.
+    long long block_start_orig = 0;  ///< Original-query coordinate at the start of the interval.
+    long long block_end_orig = 0;    ///< Original-query coordinate at the end of the interval.
     long long block_len = 0;         ///< Inclusive interval length.
-    std::string left_ref_pos;        ///< Nearest mapped reference position to the left, or empty.
-    std::string right_ref_pos;       ///< Nearest mapped reference position to the right, or empty.
+    std::string left_ref_pos;        ///< Nearest mapped reference-alignment position to the left, or empty.
+    std::string right_ref_pos;       ///< Nearest mapped reference-alignment position to the right, or empty.
 };
 
-/** @brief Aggregated mapout loss statistics for one sample. */
+/** @brief Aggregated mapout projection-loss statistics for one sample. */
 struct QcStats {
-    long long lost_count = 0;         ///< Total number of original positions mapped to `-`.
-    long long lost_block_count = 0;   ///< Number of contiguous lost intervals.
-    long long max_lost_block_len = 0; ///< Length of the longest contiguous lost interval.
+    long long lost_count = 0;         ///< Original-query positions whose mapout column three is `-`.
+    long long lost_block_count = 0;   ///< Number of contiguous unmapped-query intervals.
+    long long max_lost_block_len = 0; ///< Length of the longest contiguous unmapped-query interval.
 };
 
-/** @brief Final post-alignment QC row for one dispatched sample. */
+/** @brief Final mapout projection-loss QC row for one successfully aligned sample. */
 struct SampleRow {
     std::string seq_id;                 ///< Effective sample identifier.
     std::string bucket;                 ///< Dispatch bucket assigned to the sample.
     size_t seq_len = 0;                 ///< Original sequence length.
     double len_diff_ratio = 0.0;        ///< Signed length difference relative to the reference.
     double n_ratio = 0.0;               ///< Fraction of sequence characters equal to N/n.
-    long long lost_count = 0;           ///< Number of original positions lost by alignment.
+    long long lost_count = 0;           ///< Original-query positions whose mapout column three is `-`.
     double lost_ratio = 0.0;            ///< `lost_count / seq_len`, or zero for an empty sequence.
-    long long lost_block_count = 0;     ///< Number of contiguous lost intervals.
-    long long max_lost_block_len = 0;   ///< Longest contiguous lost interval.
-    std::string qc_level;               ///< Post-alignment level: `PASS`, `WARN`, or `FAIL`.
+    long long lost_block_count = 0;     ///< Number of contiguous unmapped-query intervals.
+    long long max_lost_block_len = 0;   ///< Longest contiguous unmapped-query interval.
+    std::string qc_level;               ///< Mapout projection-loss level: `PASS`, `WARN`, or `FAIL`.
 };
 
 /**
  * @brief Complete result of processing one independently dispatched chunk.
  *
  * A failed result carries status and diagnostics but no MSA payload. Successful
- * results may additionally contain parsed mapout details when QC was enabled.
+ * results may additionally contain parsed mapout details when mapout QC was enabled.
  */
 struct ChunkResult {
     std::string bucket_name; ///< Bucket from which the chunk was dispatched.
@@ -158,7 +166,7 @@ struct ChunkResult {
     size_t record_count = 0; ///< Number of query records assigned to the chunk.
     size_t total_bases = 0;  ///< Sum of query-sequence lengths in the chunk.
     std::vector<std::string> seq_ids; ///< Effective identifiers in dispatch order.
-    std::vector<DeletedBlock> deleted_blocks; ///< Parsed mapout deletion intervals.
-    std::unordered_map<std::string, QcStats> qc_sample_stats; ///< Parsed per-sample mapout statistics.
+    std::vector<DeletedBlock> deleted_blocks; ///< Parsed contiguous unmapped-query intervals (not biological deletions).
+    std::unordered_map<std::string, QcStats> qc_sample_stats; ///< Parsed per-sample mapout projection-loss statistics.
 };
 
