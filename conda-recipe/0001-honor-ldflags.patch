@@ -1,5 +1,0 @@
---- a/Makefile
-+++ b/Makefile
-@@ -20 +20 @@
--	$(CXX) $(CXXFLAGS) $(OBJS) -o $@
-+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJS) -o $@
