@@ -4,6 +4,16 @@ vira is a tool written in C++17 for viral-genome multiple sequence alignment.
 
 ## 🔨Installation and Usage
 
+### 1.0 Linux x86_64 - Conda
+
+The Conda package includes MAFFT as a runtime dependency:
+
+```bash
+conda create -n vira -c malab -c conda-forge -c bioconda vira
+conda activate vira
+vira --help
+```
+
 <!--
 ### 1.1 Linux/WSL(Windows Subsystem for Linux) - install dependency
 
