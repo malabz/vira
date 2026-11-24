@@ -4,32 +4,36 @@ vira is a tool written in C++17 for viral-genome multiple sequence alignment.
 
 ## 🔨Installation and Usage
 
-### 1.0 Linux x86_64 - Conda
+### 1.1 Linux/WSL (Windows Subsystem for Linux, x86_64) - from Anaconda
 
-The Conda package includes MAFFT as a runtime dependency:
+The Conda package is available for Linux x86_64 from the
+[MALAB channel](https://anaconda.org/malab/vira). MAFFT is installed
+automatically as a runtime dependency. The current Conda release is
+`vira 0.2.0.dev5`.
 
-```bash
-conda create -n vira -c malab -c conda-forge -c bioconda vira
-conda activate vira
-vira --help
-```
-
-<!--
-### 1.1 Linux/WSL(Windows Subsystem for Linux) - install dependency
-
-vira requires MAFFT. We recommend using Conda to install MAFFT.
+1. If you are using Windows, install WSL first.
+2. Download and install [Anaconda](https://www.anaconda.com/download) or Miniconda.
+3. Install ViRA.
 
 ```bash
-# 1 Create and activate a conda environment
+# 1 Create and activate a Conda environment for ViRA
 conda create -n vira_env
 conda activate vira_env
 
-# 2 Install MAFFT
-conda install -c bioconda mafft
-```
--->
+# 2 Add channels to Conda for this environment
+conda config --env --add channels bioconda
+conda config --env --add channels conda-forge
+conda config --env --add channels malab
+conda config --env --set channel_priority strict
 
-### 1.1 Linux/WSL(Windows Subsystem for Linux) - from the source code
+# 3 Install ViRA and its dependencies
+conda install vira
+
+# 4 Test ViRA
+vira -h
+```
+
+### 1.2 Linux/WSL (Windows Subsystem for Linux) - from the source code
 
 1.Download and compile the source code. Make sure your compiler supports C++17.
 
