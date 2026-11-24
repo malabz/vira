@@ -8,6 +8,8 @@ package:
 source:
   url: https://github.com/malabz/vira/archive/df2a8a1f1183fd36c4daed743ff2614f4d6375ca.tar.gz
   sha256: cb841a50855f93ded66057b1fe32f3da66d732d26e3a9b3b7a17c985158ecf02
+  patches:
+    - 0001-honor-ldflags.patch
 
 build:
   number: 0
