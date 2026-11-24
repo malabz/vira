@@ -36,7 +36,7 @@ jobs:
         run: conda install --yes conda-build anaconda-client
 
       - name: Build and test linux-64 package
-        run: conda build conda-recipe --output-folder dist --channel conda-forge --channel bioconda
+        run: conda-build conda-recipe --output-folder dist --channel conda-forge --channel bioconda
 
       - name: List package artifacts
         run: find dist/linux-64 -maxdepth 1 -type f -print
